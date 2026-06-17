@@ -1,0 +1,1 @@
+import('react-native-reanimated/plugin/index.js').then(() => console.log('ok')).catch(e => console.log(e.message));
