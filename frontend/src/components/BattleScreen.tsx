@@ -12,10 +12,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useGameStore } from "../store/gameStore";
 import { chatWithNPC, generateNPC, SSEEvent } from "../api/sse";
-import { DialogueMessage, ArtifactType, Artifact, GamePhase, PlantStatus, LevelConfig, LEVELS } from "@aigame/shared";
+import { DialogueMessage, ArtifactType, Artifact, PlantStatus, LevelConfig, LEVELS } from "@aigame/shared";
 import HeartDomainMini from "./HeartDomainMini";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const CHAT_MAX_HEIGHT = SCREEN_HEIGHT * 0.45; // 聊天区最大高度为屏幕的45%
 
 // 打字机效果 Hook
 function useTypewriter(text: string, speed = 30) {
@@ -167,6 +168,8 @@ interface BattleScreenProps {
   level: number;
 }
 
+const MAX_TURNS = 10; // 最大回合数，超过后根据分数判定胜负
+
 export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
@@ -177,18 +180,29 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   // 从配置中获取当前关卡信息
   const levelConfig: LevelConfig = LEVELS[level - 1] || LEVELS[0];
 
+  // 随机选择一个场景（每关固定，不随重渲染改变）
+  const [currentScenario] = useState(() => {
+    const scenarios = levelConfig.scenarios;
+    return scenarios[Math.floor(Math.random() * scenarios.length)];
+  });
+
   // 本地状态
   const [inputText, setInputText] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
   const [isNPCGenerating, setIsNPCGenerating] = useState(false);
+  const [lastUsedArtifact, setLastUsedArtifact] = useState<Artifact | null>(null);
   const [activeArtifactType, setActiveArtifactType] = useState<ArtifactType | null>(null);
   const [stormMode, setStormMode] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isBattleStart, setIsBattleStart] = useState(true);
   const [showIntro, setShowIntro] = useState(true);
+  const [showVictoryModal, setShowVictoryModal] = useState(false);
+  const [showGameOverModal, setShowGameOverModal] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
+  // 用 ref 追踪后端推送的最新数值（避免闭包过期）
+  const latestValues = useRef({ npcControlLevel: conversation.npcControlLevel, playerResistance: conversation.playerResistance, turnCount: 0 });
 
   // 自动滚动到底部
   useEffect(() => {
@@ -303,9 +317,11 @@ NPC控制等级：${conversation.npcControlLevel}，
               break;
             case "control_level":
               store.setNpcControlLevel(event.data);
+              latestValues.current.npcControlLevel = event.data;
               break;
             case "shield_damage":
               store.setPlayerResistance(event.data);
+              latestValues.current.playerResistance = event.data;
               if (event.data < 30) {
                 setStormMode(true);
               }
@@ -321,13 +337,33 @@ NPC控制等级：${conversation.npcControlLevel}，
               setIsSending(false);
               store.setPlayerTurn(true);
               store.tickCooldowns();
+              latestValues.current.turnCount++;
               store.incrementTurn();
-              if (conversation.playerResistance < 20) {
-                store.setCritical(true);
-                store.setCriticalCountdown(conversation.criticalCountdown - 1);
+
+              const vals = latestValues.current;
+
+              // 到达最大回合数 → 根据分数判定胜负
+              if (vals.turnCount >= MAX_TURNS) {
+                if (vals.npcControlLevel < 50) {
+                  setShowVictoryModal(true);
+                } else {
+                  setShowGameOverModal(true);
+                }
+                break;
               }
-              if (conversation.playerResistance <= 0 || conversation.npcControlLevel >= 100) {
-                store.setGameOver(false);
+
+              if (vals.playerResistance < 20) {
+                store.setCritical(true);
+                const newCountdown = conversation.criticalCountdown - 1;
+                store.setCriticalCountdown(newCountdown);
+                if (newCountdown <= 0) {
+                  setShowVictoryModal(false);
+                  setShowGameOverModal(true);
+                }
+              }
+              if (vals.playerResistance <= 0 || vals.npcControlLevel >= 100) {
+                setShowVictoryModal(false);
+                setShowGameOverModal(true);
               }
               break;
             case "error":
@@ -338,7 +374,7 @@ NPC控制等级：${conversation.npcControlLevel}，
               break;
           }
         },
-        undefined,
+        lastUsedArtifact,
         abortRef.current.signal,
         {
           level,
@@ -346,8 +382,10 @@ NPC控制等级：${conversation.npcControlLevel}，
           levelSubtitle: levelConfig.subtitle,
           levelNpcRole: levelConfig.npcRole,
           levelTactics: levelConfig.tactics.join("、"),
+          levelScenario: currentScenario,
         }
       );
+      setLastUsedArtifact(null); // 法器信息已发送，清除
     } catch (err: any) {
       if (err.name !== "AbortError") {
         console.error("对话请求失败:", err);
@@ -366,6 +404,8 @@ NPC控制等级：${conversation.npcControlLevel}，
     addMessageWithId,
     level,
     levelConfig,
+    currentScenario,
+    lastUsedArtifact,
   ]);
 
   // 使用法器
@@ -375,6 +415,7 @@ NPC控制等级：${conversation.npcControlLevel}，
 
       store.useArtifact(artifact.id);
       setActiveArtifactType(artifact.type);
+      setLastUsedArtifact(artifact);
       setTimeout(() => setActiveArtifactType(null), 1500);
 
       // 根据法器类型产生不同效果
@@ -418,11 +459,10 @@ NPC控制等级：${conversation.npcControlLevel}，
     if (abortRef.current) {
       abortRef.current.abort();
     }
-    store.setPhase(GamePhase.AftermathRepair);
     onComplete?.(false);
-  }, [store, onComplete]);
+  }, [onComplete]);
 
-  // 战斗胜利条件：NPC 控制等级降为 0
+  // 监测胜利条件（NPC控制等级归零）
   useEffect(() => {
     if (
       conversation.npcControlLevel <= 0 &&
@@ -436,12 +476,9 @@ NPC控制等级：${conversation.npcControlLevel}，
         timestamp: Date.now(),
       });
       setStormMode(false);
-      setTimeout(() => {
-        store.setGameOver(true);
-        onComplete?.(true);
-      }, 2000);
+      setShowVictoryModal(true);
     }
-  }, [conversation.npcControlLevel, conversation.turnCount, isBattleStart, isNPCGenerating, store, addMessageWithId, onComplete]);
+  }, [conversation.npcControlLevel, conversation.turnCount, isBattleStart, isNPCGenerating, store, addMessageWithId]);
 
   // 开局自动开始
   useEffect(() => {
@@ -458,6 +495,13 @@ NPC控制等级：${conversation.npcControlLevel}，
 
   // 已装备的法器
   const equippedArtifacts = sanctuary.equippedArtifacts;
+
+  // NPC 回复时自动滚动到底部
+  useEffect(() => {
+    if (scrollRef.current) {
+      setTimeout(() => scrollRef.current?.scrollToEnd?.({ animated: true }), 50);
+    }
+  }, [conversation.messages.length, isWaiting]);
 
   return (
     <GestureHandlerRootView style={styles.container}>
@@ -497,6 +541,23 @@ NPC控制等级：${conversation.npcControlLevel}，
 
         {/* 回合 */}
         <Text style={styles.turnText}>回合 {conversation.turnCount}</Text>
+      </View>
+
+      {/* 植物状态 */}
+      <View style={styles.plantBar}>
+        {sanctuary.plants.map((p) => (
+          <View key={p.id} style={styles.plantBadge}>
+            <Text style={styles.plantIcon}>
+              {p.status === PlantStatus.Healthy ? "🌿" :
+               p.status === PlantStatus.Shaking ? "🌱" :
+               p.status === PlantStatus.Defoliated ? "🍂" : "💀"}
+            </Text>
+            <Text style={[styles.plantName, p.status !== PlantStatus.Healthy && styles.plantNameDamaged]}>
+              {p.name}
+            </Text>
+          </View>
+        ))}
+        <Text style={styles.plantCount}>×{sanctuary.plants.length}</Text>
       </View>
 
       {/* NPC名称 */}
@@ -605,6 +666,54 @@ NPC控制等级：${conversation.npcControlLevel}，
           </Text>
         </View>
       )}
+
+      {/* 失败弹框 */}
+      {showGameOverModal && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalIcon}>💔</Text>
+            <Text style={[styles.modalTitle, { color: "#ef5350" }]}>心域失守</Text>
+            <Text style={styles.modalDesc}>
+              {conversation.criticalCountdown <= 0
+                ? "你的抵抗在持续的侵蚀下彻底崩溃了。"
+                : "你的心域边界已被NPC完全渗透。"}
+              {"\n"}需要进行修复来恢复。
+            </Text>
+            <TouchableOpacity
+              style={[styles.modalConfirmBtn, { backgroundColor: "#ef5350" }]}
+              onPress={() => {
+                setShowGameOverModal(false);
+                onComplete?.(false);
+              }}
+            >
+              <Text style={styles.modalConfirmText}>进入修复</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* 胜利确认弹框 */}
+      {showVictoryModal && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalIcon}>🏆</Text>
+            <Text style={styles.modalTitle}>战斗胜利</Text>
+            <Text style={styles.modalDesc}>
+              你成功抵御了{conversation.npcName}的心理操控！{'\n'}
+              是时候修复受损的心域边界了。
+            </Text>
+            <TouchableOpacity
+              style={styles.modalConfirmBtn}
+              onPress={() => {
+                setShowVictoryModal(false);
+                onComplete?.(true);
+              }}
+            >
+              <Text style={styles.modalConfirmText}>进入修复</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </GestureHandlerRootView>
   );
 }
@@ -709,6 +818,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  plantBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: "#151525",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  plantBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  plantIcon: {
+    fontSize: 12,
+  },
+  plantName: {
+    color: "#aaddaa",
+    fontSize: 10,
+  },
+  plantNameDamaged: {
+    color: "#cc8888",
+  },
+  plantCount: {
+    color: "#666",
+    fontSize: 10,
+    marginLeft: 2,
+  },
   npcTitleBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -735,6 +873,7 @@ const styles = StyleSheet.create({
   },
   messageList: {
     flex: 1,
+    maxHeight: CHAT_MAX_HEIGHT,
   },
   messageListContent: {
     padding: 16,
@@ -925,5 +1064,51 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 12,
     marginTop: 2,
+  },
+  // 胜利弹框
+  modalOverlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "#000000aa",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 200,
+  },
+  modalCard: {
+    backgroundColor: "#1a1a2e",
+    borderRadius: 16,
+    padding: 24,
+    marginHorizontal: 40,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#7c4dff44",
+  },
+  modalIcon: {
+    fontSize: 48,
+    marginBottom: 12,
+  },
+  modalTitle: {
+    color: "#b388ff",
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 8,
+  },
+  modalDesc: {
+    color: "#aaa",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  modalConfirmBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    backgroundColor: "#7c4dff",
+  },
+  modalConfirmText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

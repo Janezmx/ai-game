@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -101,6 +101,37 @@ function BreathingGuide({
 }
 
 // ==================== 边界重绘组件 ====================
+/** 计算绘制路径对理想圆形的覆盖百分比 */
+function calcCoverage(
+  allPaths: { points: { x: number; y: number }[] }[],
+  sampleCount = 48,
+  threshold = 12,
+): number {
+  if (allPaths.length === 0) return 0;
+  const r = CENTER * 0.7;
+  // 生成理想圆上的采样点
+  const samples: { x: number; y: number }[] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const a = (i / sampleCount) * Math.PI * 2;
+    samples.push({ x: CENTER + Math.cos(a) * r, y: CENTER + Math.sin(a) * r });
+  }
+  // 展平所有绘制点
+  const allPoints = allPaths.flatMap((p) => p.points);
+  // 统计被覆盖的采样点
+  let covered = 0;
+  for (const s of samples) {
+    for (const p of allPoints) {
+      const dx = s.x - p.x;
+      const dy = s.y - p.y;
+      if (dx * dx + dy * dy <= threshold * threshold) {
+        covered++;
+        break;
+      }
+    }
+  }
+  return Math.round((covered / sampleCount) * 100);
+}
+
 function BoundaryDrawer({
   onComplete,
   integrity,
@@ -112,27 +143,23 @@ function BoundaryDrawer({
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  const idealPoints = useRef<{ x: number; y: number }[]>([]);
-  useEffect(() => {
-    const points: { x: number; y: number }[] = [];
-    for (let i = 0; i <= 32; i++) {
-      const angle = (i / 32) * Math.PI * 2;
-      points.push({
-        x: CENTER + Math.cos(angle) * (CENTER * 0.7),
-        y: CENTER + Math.sin(angle) * (CENTER * 0.7),
-      });
-    }
-    idealPoints.current = points;
-  }, []);
+  // 实时覆盖度：合并已完成路径和正在绘制的路径
+  const liveCoverage = useMemo(() => {
+    const allSegments = [
+      ...paths,
+      ...(currentPath.length > 0 ? [{ points: currentPath }] : []),
+    ];
+    return calcCoverage(allSegments);
+  }, [paths, currentPath]);
 
   const handleGesture = (event: PanGestureHandlerGestureEvent) => {
-    const { translationX, translationY, state } = event.nativeEvent;
+    const { state, absoluteX, absoluteY } = event.nativeEvent;
 
     if (state === State.ACTIVE) {
       setIsDrawing(true);
       setCurrentPath((prev) => [
         ...prev,
-        { x: CENTER + translationX, y: CENTER + translationY },
+        { x: absoluteX, y: absoluteY },
       ]);
     }
 
@@ -146,12 +173,17 @@ function BoundaryDrawer({
   };
 
   const completeDrawing = useCallback(() => {
-    // 计算边界完整性（基于路径覆盖度）
-    const totalPaths = paths.length;
-    const expectedSegments = 8;
-    const score = Math.min(100, (totalPaths / expectedSegments) * 100);
-    onComplete(Math.max(integrity, score));
+    // 用实时覆盖度作为评分
+    const finalCoverage = calcCoverage(paths);
+    onComplete(Math.max(integrity, Math.min(100, finalCoverage)));
   }, [paths, integrity]);
+
+  // 画完一笔后自动完成
+  useEffect(() => {
+    if (paths.length >= 1) {
+      completeDrawing();
+    }
+  }, [paths.length, completeDrawing]);
 
   return (
     <View style={styles.drawContainer}>
@@ -226,15 +258,8 @@ function BoundaryDrawer({
 
       <View style={styles.drawFooter}>
         <Text style={styles.drawProgress}>
-          边界完整性: {Math.round(integrity)}%
+          边界完整性: {liveCoverage}%
         </Text>
-        <TouchableOpacity
-          style={[styles.completeDrawBtn, paths.length < 2 && styles.completeDrawBtnDisabled]}
-          onPress={completeDrawing}
-          disabled={paths.length < 2}
-        >
-          <Text style={styles.completeDrawBtnText}>完成绘制</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );

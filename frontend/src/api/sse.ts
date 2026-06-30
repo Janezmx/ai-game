@@ -140,6 +140,7 @@ export function chatWithNPC(
     levelSubtitle: string;
     levelNpcRole: string;
     levelTactics: string;
+    levelScenario: string;
   }
 ): Promise<void> {
   return fetchSSE(
