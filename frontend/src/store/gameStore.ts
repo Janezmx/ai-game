@@ -15,17 +15,31 @@ import {
   DimensionScores,
   GameState,
   LEVELS,
+  GameRecord,
+  Badge,
+  ALL_BADGES,
 } from "@aigame/shared";
 
 // ==================== 初始数据 ====================
 
-function createInitialPlants(): Plant[] {
-  return [
-    { id: "p1", name: "铁木树", x: 25, y: 30, status: PlantStatus.Healthy, growthProgress: 80, anchorStrength: 70 },
-    { id: "p2", name: "净化藤", x: 60, y: 25, status: PlantStatus.Healthy, growthProgress: 60, anchorStrength: 50 },
-    { id: "p3", name: "安神草", x: 40, y: 55, status: PlantStatus.Healthy, growthProgress: 90, anchorStrength: 40 },
-    { id: "p4", name: "守护竹", x: 20, y: 65, status: PlantStatus.Healthy, growthProgress: 50, anchorStrength: 60 },
+/** 根据关卡生成植物（越高级越少、越弱） */
+function createPlantsForLevel(level: number): Plant[] {
+  const allPlants = [
+    { id: "p1", name: "铁木树", anchorStrength: 70 },
+    { id: "p2", name: "净化藤", anchorStrength: 50 },
+    { id: "p3", name: "安神草", anchorStrength: 40 },
+    { id: "p4", name: "守护竹", anchorStrength: 60 },
   ];
+  const count = Math.max(2, 5 - level); // Lv1:4, Lv2:3, Lv3:3, Lv4:2, Lv5:2
+  return allPlants.slice(0, count).map((p, i) => ({
+    id: p.id,
+    name: p.name,
+    x: 25 + i * 15,
+    y: 30 + (i % 2) * 25,
+    status: PlantStatus.Healthy,
+    growthProgress: Math.max(40, 80 - level * 8),
+    anchorStrength: Math.max(20, p.anchorStrength - (level - 1) * 5),
+  }));
 }
 
 function createInitialArtifacts(): Artifact[] {
@@ -37,27 +51,37 @@ function createInitialArtifacts(): Artifact[] {
   ];
 }
 
-function createInitialSanctuary(): SanctuaryState {
+function createInitialSanctuary(level = 1): SanctuaryState {
   return {
-    shieldHealth: 100,
-    plants: createInitialPlants(),
+    shieldHealth: Math.max(60, 100 - (level - 1) * 10),
+    plants: createPlantsForLevel(level),
     artifacts: createInitialArtifacts(),
     equippedArtifacts: createInitialArtifacts().slice(0, 3),
-    fogDensity: 0,
+    fogDensity: (level - 1) * 5,
     weather: Weather.Clear,
   };
 }
 
-function createInitialConversation(): ConversationState {
+/** 每关难度参数 */
+const LEVEL_STATS: Record<number, { resistance: number; control: number }> = {
+  1: { resistance: 100, control: 50 },
+  2: { resistance: 90, control: 55 },
+  3: { resistance: 80, control: 60 },
+  4: { resistance: 70, control: 65 },
+  5: { resistance: 60, control: 70 },
+};
+
+function createInitialConversation(level = 1): ConversationState {
+  const stats = LEVEL_STATS[level] || LEVEL_STATS[1];
   return {
     npcName: "",
     messages: [],
-    playerResistance: 100,
-    npcControlLevel: 50,
+    playerResistance: stats.resistance,
+    npcControlLevel: stats.control,
     isPlayerTurn: false,
     turnCount: 0,
     isCritical: false,
-    criticalCountdown: 5,
+    criticalCountdown: Math.max(3, 5 - (level - 1)),
   };
 }
 
@@ -85,6 +109,10 @@ function createInitialReview(): ReviewState {
     dimensionHistory: [],
     bestScores: createInitialDimensionScores(),
   };
+}
+
+function createInitialBadges(): Badge[] {
+  return ALL_BADGES.map((b) => ({ ...b }));
 }
 
 // ==================== Store 类型 ====================
@@ -145,6 +173,12 @@ export interface GameStore {
   addReviewRound: (round: ReviewRound) => void;
   setDimensionScores: (scores: DimensionScores) => void;
   setBestScores: (scores: DimensionScores) => void;
+
+  // 成长系统
+  gameHistory: GameRecord[];
+  badges: Badge[];
+  addGameRecord: (record: GameRecord) => void;
+  unlockBadge: (badgeId: string) => void;
 }
 
 // ==================== Store 实现 ====================
@@ -156,6 +190,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   conversation: createInitialConversation(),
   repair: createInitialRepair(),
   review: createInitialReview(),
+  gameHistory: [],
+  badges: createInitialBadges(),
   currentRoundIndex: 0,
 
   // 关卡管理
@@ -168,7 +204,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (next > s.totalLevels) return s.totalLevels;
     set({
       currentLevel: next,
-      conversation: createInitialConversation(),
+      conversation: createInitialConversation(next),
       currentRoundIndex: 0,
     });
     return next;
@@ -188,7 +224,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   resetForLevel: (level: number) =>
     set({
       currentLevel: level,
-      conversation: createInitialConversation(),
+      conversation: createInitialConversation(level),
       repair: createInitialRepair(),
       review: createInitialReview(),
       currentRoundIndex: 0,
@@ -370,5 +406,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setBestScores: (scores) =>
     set((s) => ({
       review: { ...s.review, bestScores: scores },
+    })),
+
+  // === 成长系统 ===
+  addGameRecord: (record) =>
+    set((s) => ({ gameHistory: [...s.gameHistory, record] })),
+
+  unlockBadge: (badgeId) =>
+    set((s) => ({
+      badges: s.badges.map((b) =>
+        b.id === badgeId && !b.unlockedAt ? { ...b, unlockedAt: Date.now() } : b
+      ),
     })),
 }));

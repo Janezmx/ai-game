@@ -4,21 +4,74 @@ import { GestureHandlerRootView } from "../mocks/gesture-handler";
 import HeartDomainPrepareScreen from "../components/HeartDomainPrepareScreen";
 import BattleScreen from "../components/BattleScreen";
 import RepairScreen from "../components/RepairScreen";
+import ReviewScreen from "../components/ReviewScreen";
 import { useGameStore } from "../store/gameStore";
-import { GamePhase, LEVELS } from "@aigame/shared";
+import { GamePhase, LEVELS, GameRecord, Badge, ALL_BADGES } from "@aigame/shared";
 
 export default function GamePage() {
   const { phase, setPhase, currentLevel, totalLevels, nextLevel, resetForLevel } = useGameStore();
   const [showLevelTransition, setShowLevelTransition] = useState(false);
   const [lastVictory, setLastVictory] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const [newBadges, setNewBadges] = useState<Badge[]>([]);
 
   const handlePrepareComplete = useCallback(() => {
     setPhase(GamePhase.DialogueBattle);
   }, [setPhase]);
 
   const handleBattleComplete = useCallback((victory: boolean) => {
-    // 无论是否最后一关，都先进入修复阶段
     setLastVictory(victory);
+    setShowReview(true); // 先显示复盘
+  }, []);
+
+  const handleReviewComplete = useCallback(() => {
+    // 保存通关记录
+    const state = useGameStore.getState();
+    const { review, currentLevel, badges: oldBadges } = state;
+    const lvlCfg = LEVELS[currentLevel - 1];
+    const best = review.bestScores;
+    const avgScore = Math.round(
+      (best.boundaryAwareness + best.emotionalStability + best.cognitiveClarity + best.assertiveResponse) / 4
+    );
+    const record: GameRecord = {
+      level: currentLevel,
+      timestamp: Date.now(),
+      victory: lastVictory,
+      avgScore,
+      dimensions: best,
+      levelTitle: lvlCfg?.title || "",
+    };
+    state.addGameRecord(record);
+
+    // 记录解锁前的徽章状态
+    const beforeUnlock = oldBadges.filter((b) => b.unlockedAt).map((b) => b.id);
+
+    // 解锁关卡徽章
+    const badgeMap: Record<number, string> = { 1: "gaslight_master", 2: "pua_resist", 3: "family_bound", 4: "net_guard", 5: "bias_breaker" };
+    const badgeId = badgeMap[currentLevel];
+    if (badgeId) state.unlockBadge(badgeId);
+    state.unlockBadge("first_clear");
+    if (avgScore >= 90) state.unlockBadge("perfect_defense");
+    const allCleared = LEVELS.every((_, i) =>
+      state.gameHistory.some((r) => r.level === i + 1)
+    );
+    if (allCleared) state.unlockBadge("all_clear");
+
+    // 找出新解锁的徽章
+    const afterState = useGameStore.getState();
+    const newlyUnlocked = afterState.badges.filter(
+      (b) => b.unlockedAt && !beforeUnlock.includes(b.id)
+    );
+    if (newlyUnlocked.length > 0) {
+      setNewBadges(newlyUnlocked);
+    } else {
+      setShowReview(false);
+      setPhase(GamePhase.AftermathRepair);
+    }
+  }, [setPhase, lastVictory]);
+
+  const handleBadgeModalClose = useCallback(() => {
+    setNewBadges([]);
     setPhase(GamePhase.AftermathRepair);
   }, [setPhase]);
 
@@ -57,7 +110,7 @@ export default function GamePage() {
           />
         );
       case GamePhase.AftermathRepair:
-        return <RepairScreen onComplete={handleRepairComplete} />;
+        return <RepairScreen onComplete={handleRepairComplete} level={currentLevel} />;
       default:
         return <HeartDomainPrepareScreen onComplete={handlePrepareComplete} />;
     }
@@ -67,7 +120,30 @@ export default function GamePage() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      {renderPhase()}
+      {showReview ? (
+        <ReviewScreen onComplete={handleReviewComplete} />
+      ) : (
+        renderPhase()
+      )}
+
+      {/* 徽章解锁弹框 */}
+      {newBadges.length > 0 && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.badgeModalCard}>
+            {newBadges.map((badge) => (
+              <View key={badge.id} style={styles.badgeModalContent}>
+                <Text style={styles.badgeModalIcon}>{badge.icon}</Text>
+                <Text style={styles.badgeModalTitle}>🎉 获得新徽章！</Text>
+                <Text style={styles.badgeModalName}>{badge.name}</Text>
+                <Text style={styles.badgeModalDesc}>{badge.description}</Text>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.badgeModalBtn} onPress={handleBadgeModalClose}>
+              <Text style={styles.badgeModalBtnText}>太棒了！</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* 下一关确认弹框 */}
       {showNextLevelModal && (
@@ -115,6 +191,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0a0a1a",
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
   },
   levelTransition: {
     ...StyleSheet.absoluteFillObject,
@@ -206,4 +285,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
   },
+  badgeModalCard: {
+    backgroundColor: "#1a1a2e",
+    borderRadius: 20,
+    padding: 24,
+    marginHorizontal: 32,
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#ffd70066",
+  },
+  badgeModalContent: { alignItems: "center", marginBottom: 8 },
+  badgeModalIcon: { fontSize: 64, marginBottom: 8 },
+  badgeModalTitle: { color: "#ffd700", fontSize: 20, fontWeight: "bold", marginBottom: 8 },
+  badgeModalName: { color: "#fff", fontSize: 18, fontWeight: "600", marginBottom: 4 },
+  badgeModalDesc: { color: "#aaa", fontSize: 13, textAlign: "center" },
+  badgeModalBtn: {
+    marginTop: 16,
+    backgroundColor: "#ffd700",
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 10,
+  },
+  badgeModalBtnText: { color: "#1a1a2e", fontSize: 16, fontWeight: "bold" },
 });

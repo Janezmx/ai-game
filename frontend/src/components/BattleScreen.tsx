@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useGameStore } from "../store/gameStore";
 import { chatWithNPC, generateNPC, SSEEvent } from "../api/sse";
-import { DialogueMessage, ArtifactType, Artifact, PlantStatus, LevelConfig, LEVELS } from "@aigame/shared";
+import { DialogueMessage, ArtifactType, Artifact, PlantStatus, LevelConfig, LEVELS, ReviewRound, NPCResponseAssessment } from "@aigame/shared";
 import HeartDomainMini from "./HeartDomainMini";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -203,6 +203,8 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const startedRef = useRef(false);
   // 用 ref 追踪后端推送的最新数值（避免闭包过期）
   const latestValues = useRef({ npcControlLevel: conversation.npcControlLevel, playerResistance: conversation.playerResistance, turnCount: 0 });
+  const lastTrapType = useRef("");
+  const lastAlternatives = useRef<string[]>([]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -319,19 +321,49 @@ NPC控制等级：${conversation.npcControlLevel}，
               store.setNpcControlLevel(event.data);
               latestValues.current.npcControlLevel = event.data;
               break;
-            case "shield_damage":
-              store.setPlayerResistance(event.data);
-              latestValues.current.playerResistance = event.data;
-              if (event.data < 30) {
+            case "shield_damage": {
+              // 植物锚定减免：植物锚定总值越高，受到的伤害越低
+              const plantDef = sanctuary.plants.reduce((sum, p) => sum + (p.status === PlantStatus.Healthy ? p.anchorStrength : p.anchorStrength * 0.5), 0);
+              const reduction = Math.min(15, plantDef / 10);
+              const actualDamage = Math.min(event.data, event.data + reduction);
+              store.setPlayerResistance(actualDamage);
+              latestValues.current.playerResistance = actualDamage;
+              if (actualDamage < 30) {
                 setStormMode(true);
               }
               break;
+            }
             case "plant_status":
               if (sanctuary.plants.length > 0) {
                 const plant = sanctuary.plants[Math.floor(Math.random() * sanctuary.plants.length)];
                 store.setPlantStatus(plant.id, PlantStatus.Shaking);
               }
               break;
+            case "assessment": {
+              const a = event.data as NPCResponseAssessment;
+              lastTrapType.current = a.trapType || "";
+              lastAlternatives.current = a.alternatives || [];
+              const msgs = conversation.messages;
+              const npcMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
+              const playerMsg = msgs.length > 1 ? msgs[msgs.length - 2] : undefined;
+              if (npcMsg && npcMsg.role === "npc") {
+                const round: ReviewRound = {
+                  npcMessage: { ...npcMsg, trapType: a.trapType, playerStatus: a.playerStatus, assessment: a.assessment, alternatives: a.alternatives },
+                  playerMessage: playerMsg?.role === "player" ? playerMsg : undefined,
+                  assessment: a,
+                };
+                store.addReviewRound(round);
+                store.setDimensionScores(a.dimensions);
+                const best = store.review.bestScores;
+                store.setBestScores({
+                  boundaryAwareness: Math.max(best.boundaryAwareness, a.dimensions.boundaryAwareness),
+                  emotionalStability: Math.max(best.emotionalStability, a.dimensions.emotionalStability),
+                  cognitiveClarity: Math.max(best.cognitiveClarity, a.dimensions.cognitiveClarity),
+                  assertiveResponse: Math.max(best.assertiveResponse, a.dimensions.assertiveResponse),
+                });
+              }
+              break;
+            }
             case "done":
               setIsWaiting(false);
               setIsSending(false);
@@ -418,16 +450,23 @@ NPC控制等级：${conversation.npcControlLevel}，
       setLastUsedArtifact(artifact);
       setTimeout(() => setActiveArtifactType(null), 1500);
 
-      // 根据法器类型产生不同效果
+      // 法器策略系统：特定法器对特定操控手法有克制加成
+      const trap = lastTrapType.current;
+      const hasBonus = (keywords: string[]) => keywords.some((k) => trap.includes(k));
+      let bonus = 1;
+
       switch (artifact.type) {
-        case ArtifactType.Shield:
-          store.setPlayerResistance(conversation.playerResistance + 15);
+        case ArtifactType.Shield: // 心盾：克制煤气灯/感受否定
+          bonus = hasBonus(["煤气灯", "感受否定", "情感绑架"]) ? 2 : 1;
+          store.setPlayerResistance(conversation.playerResistance + 15 * bonus);
           break;
-        case ArtifactType.Mirror:
-          store.setNpcControlLevel(conversation.npcControlLevel - 10);
+        case ArtifactType.Mirror: // 真言镜：克制模糊逻辑/记忆否认
+          bonus = hasBonus(["模糊逻辑", "记忆否认", "事实扭曲"]) ? 2 : 1;
+          store.setNpcControlLevel(conversation.npcControlLevel - 10 * bonus);
           break;
-        case ArtifactType.Spear:
-          store.setNpcControlLevel(conversation.npcControlLevel - 20);
+        case ArtifactType.Spear: // 破谎矛：克制所有类型
+          bonus = trap ? 1.5 : 1;
+          store.setNpcControlLevel(conversation.npcControlLevel - 20 * bonus);
           break;
       }
 
@@ -625,6 +664,25 @@ NPC控制等级：${conversation.npcControlLevel}，
         </View>
       )}
 
+      {/* 建议回复选项 */}
+      {lastAlternatives.current.length > 0 && conversation.isPlayerTurn && !isWaiting && !isNPCGenerating && (
+        <View style={styles.suggestionsBar}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsContent}>
+            {lastAlternatives.current.slice(0, 3).map((alt, i) => (
+              <TouchableOpacity
+                key={i}
+                style={styles.suggestionChip}
+                onPress={() => {
+                  setInputText(alt);
+                }}
+              >
+                <Text style={styles.suggestionText} numberOfLines={2}>{alt}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* 输入区域 */}
       <View style={[styles.inputArea, { paddingBottom: insets.bottom + 8 }]}>
         <TextInput
@@ -656,6 +714,23 @@ NPC控制等级：${conversation.npcControlLevel}，
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* 迷雾效果：越危险雾越浓 */}
+      <View
+        style={[
+          styles.fogOverlay,
+          {
+            opacity: Math.min(0.7,
+              (1 - conversation.playerResistance / 100) * 0.35 +
+              (conversation.npcControlLevel / 100) * 0.25 +
+              (sanctuary.plants.filter((p) => p.status !== PlantStatus.Healthy).length /
+                Math.max(sanctuary.plants.length, 1)) * 0.2 +
+              (stormMode ? 0.15 : 0)
+            ),
+          },
+        ]}
+        pointerEvents="none"
+      />
 
       {/* 临界状态覆盖 */}
       {conversation.isCritical && (
@@ -722,6 +797,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0d0d1a",
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
   },
   levelBanner: {
     alignItems: "center",
@@ -949,6 +1027,32 @@ const styles = StyleSheet.create({
     color: "#7c7cff",
     fontWeight: "bold",
   },
+  suggestionsBar: {
+    backgroundColor: "#151525",
+    borderTopWidth: 1,
+    borderTopColor: "#2a2a4a",
+    paddingVertical: 6,
+    maxHeight: 60,
+  },
+  suggestionsContent: {
+    paddingHorizontal: 12,
+    gap: 8,
+    alignItems: "center",
+  },
+  suggestionChip: {
+    backgroundColor: "#1a2a3a",
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#4fc3f733",
+    maxWidth: 200,
+  },
+  suggestionText: {
+    color: "#b0d4e8",
+    fontSize: 11,
+    lineHeight: 16,
+  },
   artifactBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -1045,6 +1149,15 @@ const styles = StyleSheet.create({
   skipBtnText: {
     color: "#888",
     fontSize: 13,
+  },
+  fogOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#1a1a3a",
+    zIndex: 50,
   },
   criticalOverlay: {
     position: "absolute",

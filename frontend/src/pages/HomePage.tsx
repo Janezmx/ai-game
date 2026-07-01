@@ -23,6 +23,14 @@ export default function HomePage() {
       >
         <Text style={styles.startButtonText}>开始修行</Text>
       </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.growthButton}
+        onPress={() => navigate("/growth")}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.growthButtonText}>🌱 成长记录</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -34,6 +42,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
   },
   title: {
     fontSize: 42,
@@ -75,5 +86,18 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
     letterSpacing: 2,
+  },
+  growthButton: {
+    marginTop: 16,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#7c4dff66",
+  },
+  growthButtonText: {
+    color: "#b388ff",
+    fontSize: 15,
+    fontWeight: "500",
   },
 });

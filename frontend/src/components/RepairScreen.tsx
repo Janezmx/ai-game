@@ -6,7 +6,7 @@ import {
   StyleSheet,
   Dimensions,
 } from "react-native";
-import Svg, { Path, Circle, G, Defs, LinearGradient, Stop } from "react-native-svg";
+import Svg, { Path, G, Defs, LinearGradient, Stop } from "react-native-svg";
 import { GestureHandlerRootView, PanGestureHandler, State, PanGestureHandlerGestureEvent } from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
@@ -101,20 +101,16 @@ function BreathingGuide({
 }
 
 // ==================== 边界重绘组件 ====================
-/** 计算绘制路径对理想圆形的覆盖百分比 */
+/** 计算绘制路径对理想边界的覆盖百分比 */
 function calcCoverage(
   allPaths: { points: { x: number; y: number }[] }[],
+  sides: number,
   sampleCount = 48,
   threshold = 12,
 ): number {
   if (allPaths.length === 0) return 0;
-  const r = CENTER * 0.7;
-  // 生成理想圆上的采样点
-  const samples: { x: number; y: number }[] = [];
-  for (let i = 0; i < sampleCount; i++) {
-    const a = (i / sampleCount) * Math.PI * 2;
-    samples.push({ x: CENTER + Math.cos(a) * r, y: CENTER + Math.sin(a) * r });
-  }
+  // 生成理想形状上的采样点
+  const samples = getShapePoints(sides, sampleCount);
   // 展平所有绘制点
   const allPoints = allPaths.flatMap((p) => p.points);
   // 统计被覆盖的采样点
@@ -132,12 +128,47 @@ function calcCoverage(
   return Math.round((covered / sampleCount) * 100);
 }
 
+/** 生成多边形/圆形的顶点 */
+function getShapePoints(sides: number, count: number): { x: number; y: number }[] {
+  const r = CENTER * 0.7;
+  const points: { x: number; y: number }[] = [];
+  if (sides <= 0) {
+    // 圆形：平滑采样
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      points.push({ x: CENTER + Math.cos(a) * r, y: CENTER + Math.sin(a) * r });
+    }
+  } else {
+    // 多边形：每个边再细分采样点
+    const perSide = Math.floor(count / sides);
+    for (let s = 0; s < sides; s++) {
+      const a1 = (s / sides) * Math.PI * 2 - Math.PI / 2;
+      const a2 = ((s + 1) / sides) * Math.PI * 2 - Math.PI / 2;
+      const p1 = { x: CENTER + Math.cos(a1) * r, y: CENTER + Math.sin(a1) * r };
+      const p2 = { x: CENTER + Math.cos(a2) * r, y: CENTER + Math.sin(a2) * r };
+      for (let j = 0; j < perSide; j++) {
+        const t = j / perSide;
+        points.push({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t });
+      }
+    }
+  }
+  return points;
+}
+
+/** 生成 SVG path d 属性 */
+function pointsToPathD(points: { x: number; y: number }[]): string {
+  if (points.length === 0) return "";
+  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ") + "Z";
+}
+
 function BoundaryDrawer({
   onComplete,
   integrity,
+  sides,
 }: {
   onComplete: (integrity: number) => void;
   integrity: number;
+  sides: number;
 }) {
   const [paths, setPaths] = useState<{ points: { x: number; y: number }[] }[]>([]);
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
@@ -149,8 +180,12 @@ function BoundaryDrawer({
       ...paths,
       ...(currentPath.length > 0 ? [{ points: currentPath }] : []),
     ];
-    return calcCoverage(allSegments);
-  }, [paths, currentPath]);
+    return calcCoverage(allSegments, sides);
+  }, [paths, currentPath, sides]);
+
+  // 理想的边界形状路径
+  const idealPoints = useMemo(() => getShapePoints(sides, 48), [sides]);
+  const idealPathD = useMemo(() => pointsToPathD(idealPoints), [idealPoints]);
 
   const handleGesture = (event: PanGestureHandlerGestureEvent) => {
     const { state, absoluteX, absoluteY } = event.nativeEvent;
@@ -174,20 +209,23 @@ function BoundaryDrawer({
 
   const completeDrawing = useCallback(() => {
     // 用实时覆盖度作为评分
-    const finalCoverage = calcCoverage(paths);
+    const finalCoverage = calcCoverage(paths, sides);
     onComplete(Math.max(integrity, Math.min(100, finalCoverage)));
-  }, [paths, integrity]);
+  }, [paths, integrity, sides]);
 
-  // 画完一笔后自动完成
+  // 覆盖率达到 40% 或画完 3 笔后自动完成
   useEffect(() => {
-    if (paths.length >= 1) {
+    if (liveCoverage >= 40 || paths.length >= 3) {
       completeDrawing();
     }
-  }, [paths.length, completeDrawing]);
+  }, [liveCoverage, paths.length, completeDrawing]);
 
   return (
     <View style={styles.drawContainer}>
       <Text style={styles.drawTitle}>手势重绘边界</Text>
+      <Text style={styles.shapeLabel}>
+        {sides <= 0 ? "⊙ 圆形" : `⬠ ${SHAPE_NAMES[sides] || "多边形"}(${sides}边)`}
+      </Text>
       <Text style={styles.drawHint}>沿着心域轮廓描绘，重建边界护盾</Text>
 
       <GestureHandlerRootView>
@@ -205,11 +243,9 @@ function BoundaryDrawer({
                 </LinearGradient>
               </Defs>
 
-              {/* 理想边界（参考圆） */}
-              <Circle
-                cx={CENTER}
-                cy={CENTER}
-                r={CENTER * 0.7}
+              {/* 理想边界（形状根据关卡变化） */}
+              <Path
+                d={idealPathD}
                 fill="none"
                 stroke="#4a9eff"
                 strokeWidth={1}
@@ -269,9 +305,14 @@ function BoundaryDrawer({
 
 interface RepairScreenProps {
   onComplete?: () => void;
+  level: number;
 }
 
-export default function RepairScreen({ onComplete }: RepairScreenProps) {
+// 每关不同形状: 圆形, 五边形, 三角形, 正方形, 六边形
+const SHAPE_SIDES: Record<number, number> = { 1: 0, 2: 5, 3: 3, 4: 4, 5: 6 };
+const SHAPE_NAMES: Record<number, string> = { 1: "圆形", 2: "五边形", 3: "三角形", 4: "正方形", 5: "六边形" };
+
+export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
   const insets = useSafeAreaInsets();
   const {
     repair,
@@ -341,6 +382,7 @@ export default function RepairScreen({ onComplete }: RepairScreenProps) {
           <BoundaryDrawer
             onComplete={handleDrawComplete}
             integrity={repair.boundaryIntegrity}
+            sides={SHAPE_SIDES[level] || 0}
           />
         )}
 
@@ -371,6 +413,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0d0d1a",
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
   },
   header: {
     paddingHorizontal: 20,
@@ -434,6 +479,12 @@ const styles = StyleSheet.create({
   drawTitle: {
     color: "#e0e0ff",
     fontSize: 18,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  shapeLabel: {
+    color: "#7c4dff",
+    fontSize: 14,
     fontWeight: "600",
     marginBottom: 4,
   },

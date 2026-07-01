@@ -407,6 +407,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0d0d1a",
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
   },
   scrollContent: {
     padding: 16,

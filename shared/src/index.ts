@@ -133,6 +133,35 @@ export interface ReviewState {
   bestScores: DimensionScores; // 历史最高分
 }
 
+// ==================== 游戏记录 / 成长系统 ====================
+export interface GameRecord {
+  level: number;
+  timestamp: number;
+  victory: boolean;
+  avgScore: number;
+  dimensions: DimensionScores;
+  levelTitle: string;
+}
+
+export interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  unlockedAt?: number;
+}
+
+export const ALL_BADGES: Badge[] = [
+  { id: "first_clear", name: "初次通关", description: "完成第一关", icon: "🌟" },
+  { id: "gaslight_master", name: "煤气灯识破者", description: "通关煤气灯效应关卡", icon: "💡" },
+  { id: "pua_resist", name: "PUA抵抗者", description: "通关职场PUA关卡", icon: "💼" },
+  { id: "family_bound", name: "亲情边界", description: "通关亲情绑架关卡", icon: "👨‍👩‍👧" },
+  { id: "net_guard", name: "网络守卫", description: "通关匿名网络攻击关卡", icon: "👾" },
+  { id: "bias_breaker", name: "偏见破除者", description: "通关隐性歧视关卡", icon: "🎭" },
+  { id: "all_clear", name: "全通者", description: "通关全部5关", icon: "🏆" },
+  { id: "perfect_defense", name: "完美防御", description: "任意一关综合评分≥90", icon: "✨" },
+];
+
 // ==================== 关卡配置 ====================
 export interface LevelConfig {
   id: number;             // 1-5
