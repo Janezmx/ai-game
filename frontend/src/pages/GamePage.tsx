@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { useNavigate } from "react-router-dom";
 import { GestureHandlerRootView } from "../mocks/gesture-handler";
 import HeartDomainPrepareScreen from "../components/HeartDomainPrepareScreen";
 import BattleScreen from "../components/BattleScreen";
@@ -9,11 +10,13 @@ import { useGameStore } from "../store/gameStore";
 import { GamePhase, LEVELS, GameRecord, Badge, ALL_BADGES } from "@aigame/shared";
 
 export default function GamePage() {
+  const navigate = useNavigate();
   const { phase, setPhase, currentLevel, totalLevels, nextLevel, resetForLevel } = useGameStore();
   const [showLevelTransition, setShowLevelTransition] = useState(false);
   const [lastVictory, setLastVictory] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [newBadges, setNewBadges] = useState<Badge[]>([]);
+  const [showHomeModal, setShowHomeModal] = useState(false);
 
   const handlePrepareComplete = useCallback(() => {
     setPhase(GamePhase.DialogueBattle);
@@ -21,14 +24,15 @@ export default function GamePage() {
 
   const handleBattleComplete = useCallback((victory: boolean) => {
     setLastVictory(victory);
-    setShowReview(true); // 先显示复盘
+    setShowReview(true);
   }, []);
 
-  const handleReviewComplete = useCallback(() => {
-    // 保存通关记录
+  // 保存通关记录（在复盘完成时调用）
+  const saveGameRecord = useCallback((victory: boolean) => {
     const state = useGameStore.getState();
     const { review, currentLevel, badges: oldBadges } = state;
     const lvlCfg = LEVELS[currentLevel - 1];
+    if (!lvlCfg) return;
     const best = review.bestScores;
     const avgScore = Math.round(
       (best.boundaryAwareness + best.emotionalStability + best.cognitiveClarity + best.assertiveResponse) / 4
@@ -36,17 +40,16 @@ export default function GamePage() {
     const record: GameRecord = {
       level: currentLevel,
       timestamp: Date.now(),
-      victory: lastVictory,
+      victory,
       avgScore,
       dimensions: best,
-      levelTitle: lvlCfg?.title || "",
+      levelTitle: lvlCfg.title,
     };
     state.addGameRecord(record);
+    console.log("[record saved]", record);
 
-    // 记录解锁前的徽章状态
+    // 解锁徽章
     const beforeUnlock = oldBadges.filter((b) => b.unlockedAt).map((b) => b.id);
-
-    // 解锁关卡徽章
     const badgeMap: Record<number, string> = { 1: "gaslight_master", 2: "pua_resist", 3: "family_bound", 4: "net_guard", 5: "bias_breaker" };
     const badgeId = badgeMap[currentLevel];
     if (badgeId) state.unlockBadge(badgeId);
@@ -57,21 +60,23 @@ export default function GamePage() {
     );
     if (allCleared) state.unlockBadge("all_clear");
 
-    // 找出新解锁的徽章
     const afterState = useGameStore.getState();
-    const newlyUnlocked = afterState.badges.filter(
-      (b) => b.unlockedAt && !beforeUnlock.includes(b.id)
-    );
+    return afterState.badges.filter((b) => b.unlockedAt && !beforeUnlock.includes(b.id));
+  }, []);
+
+  const handleReviewComplete = useCallback(() => {
+    const newlyUnlocked = saveGameRecord(lastVictory) || [];
     if (newlyUnlocked.length > 0) {
       setNewBadges(newlyUnlocked);
     } else {
       setShowReview(false);
       setPhase(GamePhase.AftermathRepair);
     }
-  }, [setPhase, lastVictory]);
+  }, [setPhase, lastVictory, saveGameRecord]);
 
   const handleBadgeModalClose = useCallback(() => {
     setNewBadges([]);
+    setShowReview(false);
     setPhase(GamePhase.AftermathRepair);
   }, [setPhase]);
 
@@ -124,6 +129,42 @@ export default function GamePage() {
         <ReviewScreen onComplete={handleReviewComplete} />
       ) : (
         renderPhase()
+      )}
+
+      {/* 首页按钮 */}
+      <TouchableOpacity style={styles.homeBtn} onPress={() => setShowHomeModal(true)}>
+        <Text style={styles.homeBtnText}>🏠</Text>
+      </TouchableOpacity>
+
+      {/* 返回首页确认弹框 */}
+      {showHomeModal && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalIcon}>🚪</Text>
+            <Text style={styles.modalTitle}>离开当前关卡？</Text>
+            <Text style={styles.modalDesc}>
+              返回首页后当前进度将丢失，确定要离开吗？
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setShowHomeModal(false)}
+              >
+                <Text style={styles.modalCancelText}>继续游戏</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalConfirmBtn, { backgroundColor: "#ef5350" }]}
+                onPress={() => {
+                  setShowHomeModal(false);
+                  resetForLevel(1);
+                  navigate("/");
+                }}
+              >
+                <Text style={styles.modalConfirmText}>返回首页</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       )}
 
       {/* 徽章解锁弹框 */}
@@ -194,6 +235,23 @@ const styles = StyleSheet.create({
     maxWidth: 500,
     width: "100%",
     alignSelf: "center",
+  },
+  homeBtn: {
+    position: "absolute",
+    top: 50,
+    right: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#1a1a2e",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 90,
+    borderWidth: 1,
+    borderColor: "#7c4dff44",
+  },
+  homeBtnText: {
+    fontSize: 18,
   },
   levelTransition: {
     ...StyleSheet.absoluteFillObject,

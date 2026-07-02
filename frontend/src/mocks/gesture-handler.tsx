@@ -115,7 +115,7 @@ export const PanGestureHandler = ({ children, onGestureEvent, onHandlerStateChan
 
   return React.createElement("div", {
     ref: handleRef,
-    style: { touchAction: "none", display: "inline-flex" },
+    style: { touchAction: "none", display: "inline-flex", alignSelf: "center" },
     ...domProps,
   }, children);
 };

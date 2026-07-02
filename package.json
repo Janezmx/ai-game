@@ -11,11 +11,21 @@
     "dev:frontend": "npm run start --workspace=@aigame/frontend",
     "dev:backend": "npm run dev --workspace=@aigame/backend",
     "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:electron": "electron electron/main.js",
+    "build:frontend": "npm run build --workspace=@aigame/frontend",
+    "build:backend": "npm run build --workspace=@aigame/backend",
+    "build": "npm run build:frontend && npm run build:backend",
+    "package:win": "npm run build && electron-builder --win --config electron-builder.json",
+    "package:mac": "npm run build && electron-builder --mac --config electron-builder.json",
+    "package:linux": "npm run build && electron-builder --linux --config electron-builder.json",
     "typecheck": "npm run typecheck --workspace=@aigame/shared"
   },
   "devDependencies": {
     "@types/react-dom": "^19.2.3",
     "concurrently": "^9.0.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.4.0"
-  }
+  },
+  "main": "electron/main.js"
 }

@@ -208,17 +208,20 @@ function BoundaryDrawer({
   };
 
   const completeDrawing = useCallback(() => {
-    // 用实时覆盖度作为评分
+    // 用已完成路径的覆盖度作为评分
     const finalCoverage = calcCoverage(paths, sides);
     onComplete(Math.max(integrity, Math.min(100, finalCoverage)));
   }, [paths, integrity, sides]);
 
-  // 覆盖率达到 40% 或画完 3 笔后自动完成
+  // 画完一笔后检测覆盖度，达到 30% 或画满 3 笔自动完成
   useEffect(() => {
-    if (liveCoverage >= 40 || paths.length >= 3) {
-      completeDrawing();
+    if (paths.length >= 1) {
+      const cov = calcCoverage(paths, sides);
+      if (cov >= 30 || paths.length >= 3) {
+        completeDrawing();
+      }
     }
-  }, [liveCoverage, paths.length, completeDrawing]);
+  }, [paths.length, sides, completeDrawing]);
 
   return (
     <View style={styles.drawContainer}>

@@ -670,19 +670,19 @@ NPC控制等级：${conversation.npcControlLevel}，
       {/* 建议回复选项 */}
       {lastAlternatives.current.length > 0 && conversation.isPlayerTurn && !isWaiting && !isNPCGenerating && (
         <View style={styles.suggestionsBar}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsContent}>
-            {lastAlternatives.current.slice(0, 3).map((alt, i) => (
+          {lastAlternatives.current.slice(0, 3).map((alt, i) => {
+            // 去掉序号前缀，如 "1. "、"① " 等
+            const cleanAlt = alt.replace(/^\s*(?:\d+[\.、\)\s]|[①②③④⑤])\s*/, "");
+            return (
               <TouchableOpacity
                 key={i}
                 style={styles.suggestionChip}
-                onPress={() => {
-                  setInputText(alt);
-                }}
+                onPress={() => { setInputText(cleanAlt); }}
               >
-                <Text style={styles.suggestionText} numberOfLines={2}>{alt}</Text>
+                <Text style={styles.suggestionText} numberOfLines={3}>{cleanAlt}</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+            );
+          })}
         </View>
       )}
 
@@ -1035,26 +1035,22 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#2a2a4a",
     paddingVertical: 6,
-    maxHeight: 60,
-  },
-  suggestionsContent: {
-    paddingHorizontal: 12,
-    gap: 8,
-    alignItems: "center",
+    paddingHorizontal: 8,
+    gap: 4,
   },
   suggestionChip: {
     backgroundColor: "#1a2a3a",
-    borderRadius: 16,
+    borderRadius: 12,
     paddingVertical: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: "#4fc3f733",
-    maxWidth: 200,
+    marginBottom: 2,
   },
   suggestionText: {
     color: "#b0d4e8",
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 17,
   },
   artifactBar: {
     flexDirection: "row",

@@ -4,3 +4,4 @@ dist/
 .next/
 *.tsbuildinfo
 *.local
+release/
