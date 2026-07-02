@@ -14,20 +14,7 @@ export function useSharedValue<T>(initial: T) {
 
 // 动画样式模拟 - 直接返回原始样式
 export function useAnimatedStyle(updater: () => any) {
-  const [style, setStyle] = React.useState(updater);
-
-  React.useEffect(() => {
-    const newValue = updater();
-    setStyle((prev: any) => {
-      const next = typeof newValue === "function" ? newValue(prev) : newValue;
-      // 如果值没变，返回旧引用让 React 跳过重渲染
-      if (JSON.stringify(prev) === JSON.stringify(next)) {
-        return prev;
-      }
-      return next;
-    });
-  });
-
+  const style = React.useMemo(updater, []);
   return style;
 }
 

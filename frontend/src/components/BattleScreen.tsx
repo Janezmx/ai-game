@@ -201,6 +201,7 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
+  const victoryTriggered = useRef(false);
   // 用 ref 追踪后端推送的最新数值（避免闭包过期）
   const latestValues = useRef({ npcControlLevel: conversation.npcControlLevel, playerResistance: conversation.playerResistance, turnCount: 0 });
   const lastTrapType = useRef("");
@@ -507,8 +508,10 @@ NPC控制等级：${conversation.npcControlLevel}，
       conversation.npcControlLevel <= 0 &&
       !isBattleStart &&
       !isNPCGenerating &&
-      conversation.turnCount > 1
+      conversation.turnCount > 1 &&
+      !victoryTriggered.current
     ) {
+      victoryTriggered.current = true;
       addMessageWithId({
         role: "player",
         content: "✨ 你成功抵御了NPC的侵蚀！心域边界暂得安宁。",

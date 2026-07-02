@@ -9,7 +9,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -100,7 +99,7 @@ export default function ReviewScreen({
   const totalRounds = rounds.length;
 
   return (
-    <GestureHandlerRootView style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <Text style={styles.title}>📋 心域复盘报告</Text>
       <Text style={styles.subtitle}>回顾你的应对，识别操控套路</Text>
 
@@ -269,12 +268,12 @@ export default function ReviewScreen({
       <TouchableOpacity style={styles.completeBtn} onPress={onComplete}>
         <Text style={styles.completeBtnText}>进入修复 →</Text>
       </TouchableOpacity>
-    </GestureHandlerRootView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d0d1a", maxWidth: 500, width: "100%", alignSelf: "center" },
+  container: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0d0d1a", maxWidth: 500, width: "100%", alignSelf: "center" },
   title: {
     color: "#b388ff",
     fontSize: 22,

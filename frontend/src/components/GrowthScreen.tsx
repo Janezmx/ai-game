@@ -10,7 +10,6 @@ import {
 import Svg, { Circle, Line, Polyline, Polygon, Text as SvgText } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CHART_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
@@ -134,7 +133,7 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
   const unlockedBadges = badges.filter((b) => b.unlockedAt);
 
   return (
-    <GestureHandlerRootView style={[styles.container, { paddingTop: insets.top, maxWidth: 500, width: "100%", alignSelf: "center" }]}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}>
           <Text style={styles.backText}>← 返回</Text>
@@ -239,12 +238,12 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
           </View>
         )}
       </ScrollView>
-    </GestureHandlerRootView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0d0d1a" },
+  container: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0d0d1a", maxWidth: 500, width: "100%", alignSelf: "center" },
   header: {
     flexDirection: "row",
     alignItems: "center",
