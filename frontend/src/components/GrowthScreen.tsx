@@ -10,6 +10,16 @@ import {
 import Svg, { Circle, Line, Polyline, Polygon, Text as SvgText } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
+import {
+  palette,
+  radius,
+  space,
+  fontSize,
+  fontWeight,
+  fontFamily,
+  shadow,
+} from "../theme";
+import { LEVEL_KNOWLEDGE, TRAP_EMOJI_MAP } from "./KnowledgeCard";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CHART_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
@@ -47,7 +57,7 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
           const p = getPoint(angles[i], lv);
           return `${p.x},${p.y}`;
         }).join(" ");
-        return <Polygon key={lv} points={pts} fill="none" stroke="#2a2a4a" strokeWidth={1} />;
+        return <Polygon key={lv} points={pts} fill="none" stroke={palette.border} strokeWidth={1} />;
       })}
       {/* 轴线 */}
       {DIMENSION_KEYS.map((_, i) => {
@@ -59,16 +69,16 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
             y1={CENTER}
             x2={end.x}
             y2={end.y}
-            stroke="#2a2a4a"
+            stroke={palette.border}
             strokeWidth={1}
           />
         );
       })}
       {/* 数据区域 */}
-      <Polygon points={polygonPoints} fill="#7c4dff44" stroke="#b388ff" strokeWidth={2} />
+      <Polygon points={polygonPoints} fill="#E0A89944" stroke={palette.primaryDark} strokeWidth={2} />
       {/* 数据点 */}
       {dataPoints.map((p, i) => (
-        <Circle key={i} cx={p.x} cy={p.y} r={4} fill="#b388ff" />
+        <Circle key={i} cx={p.x} cy={p.y} r={4} fill={palette.primaryDark} />
       ))}
       {/* 标签 */}
       {labelPoints.map((p, i) => (
@@ -76,7 +86,7 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
           key={i}
           x={p.x}
           y={p.y}
-          fill="#888"
+          fill={palette.textSoft}
           fontSize={11}
           textAnchor="middle"
           alignmentBaseline="middle"
@@ -85,7 +95,7 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
         </SvgText>
       ))}
       {/* 中心数值 */}
-      <SvgText x={CENTER} y={CENTER + 4} fill="#b388ff" fontSize={18} fontWeight="bold" textAnchor="middle">
+      <SvgText x={CENTER} y={CENTER + 4} fill={palette.primaryDark} fontSize={18} fontWeight="bold" textAnchor="middle">
         {Math.round((scores.boundaryAwareness + scores.emotionalStability + scores.cognitiveClarity + scores.assertiveResponse) / 4)}
       </SvgText>
     </Svg>
@@ -109,8 +119,8 @@ function MiniLineChart({ data, color }: { data: number[]; color: string }) {
   return (
     <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
       {/* 参考线 */}
-      <Line x1={pad} y1={pad} x2={pad} y2={pad + chartH} stroke="#2a2a4a" strokeWidth={1} />
-      <Line x1={pad} y1={pad + chartH} x2={pad + chartW} y2={pad + chartH} stroke="#2a2a4a" strokeWidth={1} />
+      <Line x1={pad} y1={pad} x2={pad} y2={pad + chartH} stroke={palette.border} strokeWidth={1} />
+      <Line x1={pad} y1={pad + chartH} x2={pad + chartW} y2={pad + chartH} stroke={palette.border} strokeWidth={1} />
       {/* 折线 */}
       <Polyline points={points} fill="none" stroke={color} strokeWidth={2} />
       {/* 数据点 */}
@@ -123,7 +133,7 @@ function MiniLineChart({ data, color }: { data: number[]; color: string }) {
 
 export default function GrowthScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
-  const { gameHistory, badges, review } = useGameStore();
+  const { gameHistory, badges, review, masteredKnowledgePointIds } = useGameStore();
   const [tab, setTab] = useState<Tab>("history");
 
   const bestScores = review.bestScores;
@@ -132,10 +142,12 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
   const totalGames = gameHistory.length;
   const unlockedBadges = badges.filter((b) => b.unlockedAt);
 
+  const allKnowledge = Object.values(LEVEL_KNOWLEDGE);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
           <Text style={styles.backText}>← 返回</Text>
         </TouchableOpacity>
         <Text style={styles.title}>🌱 成长记录</Text>
@@ -156,6 +168,10 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.statValue}>{unlockedBadges.length}/{badges.length}</Text>
           <Text style={styles.statLabel}>徽章</Text>
         </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>{masteredKnowledgePointIds.length}/{allKnowledge.length}</Text>
+          <Text style={styles.statLabel}>知识点</Text>
+        </View>
       </View>
 
       {/* 标签切换 */}
@@ -163,12 +179,14 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
         <TouchableOpacity
           style={[styles.tab, tab === "history" && styles.tabActive]}
           onPress={() => setTab("history")}
+          activeOpacity={0.7}
         >
           <Text style={[styles.tabText, tab === "history" && styles.tabTextActive]}>战绩</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, tab === "badges" && styles.tabActive]}
           onPress={() => setTab("badges")}
+          activeOpacity={0.7}
         >
           <Text style={[styles.tabText, tab === "badges" && styles.tabTextActive]}>徽章</Text>
         </TouchableOpacity>
@@ -177,6 +195,26 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {tab === "history" ? (
           <>
+            {/* 已掌握知识点 */}
+            <Text style={styles.sectionTitle}>📚 已掌握知识点</Text>
+            <View style={styles.kpWrap}>
+              {allKnowledge.map((kp) => {
+                const mastered = masteredKnowledgePointIds.includes(kp.id);
+                return (
+                  <View key={kp.id} style={[styles.kpItem, !mastered && styles.kpItemLocked]}>
+                    <Text style={styles.kpEmoji}>{TRAP_EMOJI_MAP[kp.id] || "📖"}</Text>
+                    <View style={styles.kpTextWrap}>
+                      <Text style={[styles.kpName, !mastered && styles.kpNameLocked]}>{kp.tactic}</Text>
+                      <Text style={styles.kpDef} numberOfLines={1}>{kp.definition}</Text>
+                    </View>
+                    <Text style={[styles.kpMark, mastered ? styles.kpMastered : styles.kpUnmastered]}>
+                      {mastered ? "✓" : "○"}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
             {/* 雷达图 */}
             {bestScores && (
               <View style={styles.chartCard}>
@@ -192,7 +230,7 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
               <View style={styles.chartCard}>
                 <Text style={styles.chartTitle}>📈 评分趋势</Text>
                 <View style={styles.chartCenter}>
-                  <MiniLineChart data={scoreTrend} color="#7c4dff" />
+                  <MiniLineChart data={scoreTrend} color={palette.primary} />
                 </View>
               </View>
             )}
@@ -243,90 +281,138 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
 }
 
 const styles = StyleSheet.create({
-  container: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0d0d1a", maxWidth: 500, width: "100%", alignSelf: "center" },
+  container: {
+    display: "flex",
+    flexDirection: "column",
+    height: "100vh",
+    backgroundColor: palette.bg,
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
   },
   backBtn: { width: 60 },
-  backText: { color: "#7c4dff", fontSize: 15 },
-  title: { color: "#b388ff", fontSize: 20, fontWeight: "bold", textAlign: "center" },
+  backText: { color: palette.primaryDark, fontSize: fontSize.sub, fontFamily },
+  title: { color: palette.primaryDark, fontSize: fontSize.title, fontWeight: fontWeight.bold, textAlign: "center", fontFamily },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-around",
-    paddingVertical: 12,
-    marginHorizontal: 16,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    marginBottom: 12,
+    paddingVertical: space.md,
+    marginHorizontal: space.md,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    marginBottom: space.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadow.soft,
   },
   statItem: { alignItems: "center" },
-  statValue: { color: "#b388ff", fontSize: 24, fontWeight: "bold" },
-  statLabel: { color: "#888", fontSize: 11, marginTop: 2 },
+  statValue: { color: palette.primaryDark, fontSize: 24, fontWeight: fontWeight.bold, fontFamily },
+  statLabel: { color: palette.textSoft, fontSize: fontSize.caption, marginTop: 2, fontFamily },
   tabRow: {
     flexDirection: "row",
-    marginHorizontal: 16,
-    marginBottom: 12,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 8,
+    marginHorizontal: space.md,
+    marginBottom: space.md,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
     overflow: "hidden",
+    borderWidth: 1,
+    borderColor: palette.border,
   },
-  tab: { flex: 1, paddingVertical: 10, alignItems: "center" },
-  tabActive: { backgroundColor: "#7c4dff33" },
-  tabText: { color: "#888", fontSize: 14 },
-  tabTextActive: { color: "#b388ff", fontWeight: "600" },
+  tab: { flex: 1, paddingVertical: space.sm, alignItems: "center" },
+  tabActive: { backgroundColor: "rgba(224,168,153,0.25)" },
+  tabText: { color: palette.textSoft, fontSize: fontSize.sub, fontFamily },
+  tabTextActive: { color: palette.primaryDark, fontWeight: fontWeight.semibold, fontFamily },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingTop: 0, paddingBottom: 32 },
-  chartCard: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#2a2a4a",
+  scrollContent: { padding: space.md, paddingTop: 0, paddingBottom: space.xl },
+  sectionTitle: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.sm,
+    marginTop: space.xs,
+    fontFamily,
   },
-  chartTitle: { color: "#b388ff", fontSize: 14, fontWeight: "600", marginBottom: 8 },
-  chartCenter: { alignItems: "center" },
-  sectionTitle: { color: "#b388ff", fontSize: 14, fontWeight: "600", marginBottom: 8, marginTop: 4 },
-  emptyText: { color: "#666", fontSize: 13, textAlign: "center", paddingVertical: 20 },
-  recordCard: {
-    backgroundColor: "#151525",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
+  emptyText: { color: palette.textFaint, fontSize: fontSize.body, textAlign: "center", paddingVertical: space.lg, fontFamily },
+  kpWrap: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
+    padding: space.sm,
+    marginBottom: space.md,
+    ...shadow.soft,
+  },
+  kpItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: space.sm,
+    paddingHorizontal: space.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  kpItemLocked: { opacity: 0.55 },
+  kpEmoji: { fontSize: fontSize.title, marginRight: space.sm },
+  kpTextWrap: { flex: 1 },
+  kpName: { color: palette.text, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, fontFamily },
+  kpNameLocked: { color: palette.textSoft },
+  kpDef: { color: palette.textFaint, fontSize: fontSize.caption, marginTop: 2, fontFamily },
+  kpMark: { fontSize: fontSize.title, marginLeft: space.sm, fontWeight: fontWeight.bold },
+  kpMastered: { color: palette.green },
+  kpUnmastered: { color: palette.textFaint },
+  chartCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.md,
+    marginBottom: space.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadow.soft,
+  },
+  chartTitle: { color: palette.primaryDark, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, marginBottom: space.sm, fontFamily },
+  chartCenter: { alignItems: "center" },
+  recordCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginBottom: space.sm,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   recordHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  recordLevel: { color: "#b388ff", fontSize: 14, fontWeight: "bold" },
-  recordResult: { fontSize: 13 },
-  victory: { color: "#81c784" },
-  defeat: { color: "#ef5350" },
-  recordTitle: { color: "#aaa", fontSize: 12, marginTop: 2 },
-  recordScore: { color: "#ddd", fontSize: 12, marginTop: 4 },
-  recordTime: { color: "#555", fontSize: 11, marginTop: 2 },
+  recordLevel: { color: palette.primaryDark, fontSize: fontSize.sub, fontWeight: fontWeight.bold, fontFamily },
+  recordResult: { fontSize: fontSize.body, fontFamily },
+  victory: { color: palette.green },
+  defeat: { color: palette.clay },
+  recordTitle: { color: palette.textSoft, fontSize: fontSize.caption, marginTop: 2, fontFamily },
+  recordScore: { color: palette.text, fontSize: fontSize.caption, marginTop: space.xs, fontFamily },
+  recordTime: { color: palette.textFaint, fontSize: fontSize.caption, marginTop: 2, fontFamily },
   badgeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: space.md,
     justifyContent: "center",
   },
   badgeItem: {
     width: (SCREEN_WIDTH - 56) / 3,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    padding: 12,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.md,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#7c4dff33",
+    borderColor: palette.border,
+    ...shadow.soft,
   },
-  badgeLocked: { opacity: 0.4, borderColor: "#2a2a4a" },
-  badgeIcon: { fontSize: 32, marginBottom: 6 },
+  badgeLocked: { opacity: 0.4, borderColor: palette.border },
+  badgeIcon: { fontSize: 32, marginBottom: space.xs },
   badgeIconLocked: { opacity: 0.5 },
-  badgeName: { color: "#ddd", fontSize: 12, fontWeight: "600", textAlign: "center" },
-  badgeNameLocked: { color: "#666" },
-  badgeDesc: { color: "#888", fontSize: 10, textAlign: "center", marginTop: 2 },
+  badgeName: { color: palette.text, fontSize: fontSize.caption, fontWeight: fontWeight.semibold, textAlign: "center", fontFamily },
+  badgeNameLocked: { color: palette.textFaint },
+  badgeDesc: { color: palette.textSoft, fontSize: 10, textAlign: "center", marginTop: 2, fontFamily },
 });

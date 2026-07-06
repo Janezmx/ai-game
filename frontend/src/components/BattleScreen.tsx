@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,24 +7,50 @@ import {
   StyleSheet,
   ScrollView,
   Dimensions,
+  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useGameStore } from "../store/gameStore";
 import { chatWithNPC, generateNPC, SSEEvent } from "../api/sse";
-import { DialogueMessage, ArtifactType, Artifact, PlantStatus, LevelConfig, LEVELS, ReviewRound, NPCResponseAssessment } from "@aigame/shared";
+import {
+  DialogueMessage,
+  ArtifactType,
+  Artifact,
+  LevelConfig,
+  LEVELS,
+  ReviewRound,
+  NPCResponseAssessment,
+  KnowledgePoint,
+} from "@aigame/shared";
 import HeartDomainMini from "./HeartDomainMini";
+import ProgressBar from "./ProgressBar";
+import {
+  palette,
+  radius,
+  space,
+  fontSize,
+  fontWeight,
+  fontFamily,
+  shadow,
+} from "../theme";
+import KnowledgeCard, { getLevelKnowledgePoint } from "./KnowledgeCard";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const CHAT_MAX_HEIGHT = SCREEN_HEIGHT * 0.45; // 聊天区最大高度为屏幕的45%
 
-// 打字机效果 Hook
+// 打字机效果 Hook（仅对流式消息逐字输出，非流式直接返回全文）
 function useTypewriter(text: string, speed = 30) {
   const [displayed, setDisplayed] = useState("");
 
   useEffect(() => {
     if (!text) {
       setDisplayed("");
+      return;
+    }
+    // 非流式消息：直接返回全文，跳过 setInterval
+    if (speed >= 100) {
+      setDisplayed(text);
       return;
     }
     let i = 0;
@@ -48,34 +74,52 @@ function makeMsgId(): string {
 function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming: boolean }) {
   const isPlayer = msg.role === "player";
   const typedContent = useTypewriter(msg.content, isPlayer ? 1 : 25);
+  const [showWhy, setShowWhy] = useState(false);
+  const fade = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (msg.whyNote) {
+      Animated.timing(fade, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+    }
+  }, [msg.whyNote, fade]);
 
   return (
-    <View
-      style={[
-        styles.bubbleRow,
-        isPlayer ? styles.playerRow : styles.npcRow,
-      ]}
-    >
+    <View style={[styles.bubbleRow, isPlayer ? styles.playerRow : styles.npcRow]}>
       {!isPlayer && (
         <View style={styles.npcAvatar}>
-          <Text style={styles.npcAvatarText}>{"👾"}</Text>
+          <Text style={styles.npcAvatarText}>{"🫥"}</Text>
         </View>
       )}
-      <View
-        style={[
-          styles.bubble,
-          isPlayer ? styles.playerBubble : styles.npcBubble,
-        ]}
-      >
-        <Text
-          style={[
-            styles.bubbleText,
-            isPlayer ? styles.playerText : styles.npcText,
-          ]}
-        >
+      <View style={[styles.bubble, isPlayer ? styles.playerBubble : styles.npcBubble]}>
+        <Text style={[styles.bubbleText, isPlayer ? styles.playerText : styles.npcText]}>
           {isStreaming ? typedContent : msg.content}
           {isStreaming && <Text style={styles.cursor}>|</Text>}
         </Text>
+
+        {/* 每轮「为什么」科普点评：默认收起，降低认知负担 */}
+        {!isPlayer && msg.whyNote && (
+          <Animated.View style={[styles.whyNote, { opacity: fade }]}>
+            <TouchableOpacity
+              style={styles.whyHeader}
+              onPress={() => setShowWhy((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.whyHeaderText}>💡 为什么这样操控？</Text>
+              <Text style={styles.whyToggle}>{showWhy ? "收起 ▲" : "展开 ▼"}</Text>
+            </TouchableOpacity>
+            {showWhy && (
+              <View style={styles.whyBody}>
+                <Text style={styles.whyText}>{msg.whyNote}</Text>
+                {msg.identificationTip ? (
+                  <View style={styles.tipBox}>
+                    <Text style={styles.tipLabel}>🔎 识别要点</Text>
+                    <Text style={styles.tipText}>{msg.identificationTip}</Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
+          </Animated.View>
+        )}
       </View>
       {isPlayer && (
         <View style={styles.playerAvatar}>
@@ -84,6 +128,69 @@ function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming
       )}
     </View>
   );
+}
+
+// 法器图标映射（模块级，避免每次渲染重建）
+function getArtifactIcon(type: ArtifactType) {
+  switch (type) {
+    case ArtifactType.Shield: return "🛡️";
+    case ArtifactType.Mirror: return "🪞";
+    case ArtifactType.Spear: return "🔱";
+    default: return "🧰";
+  }
+}
+
+// 第一轮玩家尚未发言时，后端还没生成 alternatives，按本关知识点（操控手法）动态生成「开口示范」兜底
+const FALLBACK_OPENING: string[] = [
+  "我理解你的出发点，但这件事我自己能做决定。",
+  "谢谢关心，不过我的边界是我的，我希望你能尊重。",
+  "我们可以继续聊，但请不要替我做判断或否定我的感受。",
+];
+
+// 逐条点评：与 LEVEL_KNOWLEDGE 的 healthyResponse 顺序一一对应，解释「为什么这句有效」
+const OPENING_RATIONALE_MAP: Record<string, string[]> = {
+  "kp-gaslight": [
+    "先锚定自我感受的真实性，切断「你太敏感了」对判断的侵蚀。",
+    "用具体事实回放替代空泛争论，让对方无法偷换你的记忆。",
+    "把模糊否认变成可查证的共同回顾，瓦解煤气灯的模糊地带。",
+  ],
+  "kp-pua": [
+    "把话题拉回事实层面，避免被情绪化贬低带偏。",
+    "要求具体反馈，让「能力不行」这类笼统打压无处落脚。",
+    "明确价值独立于单次评价，守住自我价值的底线。",
+  ],
+  "kp-family": [
+    "承接关心再划边界，既不伤感情也不让孝道被利用。",
+    "把爱与顺从解绑，点破「为你好」背后的控制。",
+    "证明关心与坚持自我可并存，拒绝二选一的内疚陷阱。",
+  ],
+  "kp-network": [
+    "主动补全语境，戳破截图被当「实锤」的误导性。",
+    "拒绝陷入对线自证，避免被群体音量淹没。",
+    "把应对转为保存证据与举报，掌握主动权。",
+  ],
+  "kp-bias": [
+    "用客观产出回应「你真的适合吗」式的关怀质疑。",
+    "直接点出双重标准，让微侵犯显形。",
+    "反转举证责任，拒绝被预设要额外证明自己。",
+  ],
+};
+
+// 无对应知识点时的通用轮换点评
+const RATIONALE_TEMPLATES: string[] = [
+  "先承接善意再明确决定权，避免被带节奏。",
+  "温和而坚定地声明边界，是抵御操控的第一步。",
+  "把对话拉回平等，阻止对方瓦解你的判断。",
+];
+
+function buildOpeningSuggestions(kp?: KnowledgePoint): { text: string; rationale: string }[] {
+  const responses =
+    kp?.healthyResponse && kp.healthyResponse.length > 0 ? kp.healthyResponse : FALLBACK_OPENING;
+  const rationales = (kp?.id && OPENING_RATIONALE_MAP[kp.id]) || RATIONALE_TEMPLATES;
+  return responses.slice(0, 3).map((text, i) => ({
+    text,
+    rationale: rationales[i] || RATIONALE_TEMPLATES[i] || "温和而坚定地守住边界。",
+  }));
 }
 
 // 法器按钮
@@ -98,15 +205,6 @@ function ArtifactButton({
 }) {
   const onCooldown = artifact.remainingCooldown > 0;
 
-  const getIcon = (type: ArtifactType) => {
-    switch (type) {
-      case ArtifactType.Shield: return "🛡️";
-      case ArtifactType.Mirror: return "🪞";
-      case ArtifactType.Spear: return "🔱";
-      default: return "🧰";
-    }
-  };
-
   return (
     <TouchableOpacity
       style={[
@@ -116,8 +214,10 @@ function ArtifactButton({
       ]}
       onPress={() => onUse(artifact)}
       disabled={onCooldown || disabled}
+      accessibilityLabel={`使用法器 ${artifact.name}`}
+      accessibilityRole="button"
     >
-      <Text style={styles.artifactIcon}>{getIcon(artifact.type)}</Text>
+      <Text style={styles.artifactIcon}>{getArtifactIcon(artifact.type)}</Text>
       <Text style={styles.artifactName} numberOfLines={1}>
         {artifact.name}
       </Text>
@@ -125,39 +225,6 @@ function ArtifactButton({
         <Text style={styles.cooldownText}>{artifact.remainingCooldown}</Text>
       )}
     </TouchableOpacity>
-  );
-}
-
-// 状态条
-function StatusBarView({
-  label,
-  value,
-  color,
-  icon,
-}: {
-  label: string;
-  value: number;
-  color: string;
-  icon: string;
-}) {
-  return (
-    <View style={styles.statusBar}>
-      <Text style={styles.statusIcon}>{icon}</Text>
-      <View style={styles.statusBarTrack}>
-        <View
-          style={[
-            styles.statusBarFill,
-            {
-              width: `${value}%`,
-              backgroundColor: color,
-            },
-          ]}
-        />
-      </View>
-      <Text style={styles.statusLabel}>
-        {label}: {Math.round(value)}
-      </Text>
-    </View>
   );
 }
 
@@ -186,6 +253,10 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
     return scenarios[Math.floor(Math.random() * scenarios.length)];
   });
 
+  // 本关知识点卡（后端生成版优先，兜底用静态）
+  const knowledgePoint = store.currentKnowledgePoint || getLevelKnowledgePoint(level);
+  const [showKp, setShowKp] = useState(false);
+
   // 本地状态
   const [inputText, setInputText] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
@@ -198,6 +269,7 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const [showIntro, setShowIntro] = useState(true);
   const [showVictoryModal, setShowVictoryModal] = useState(false);
   const [showGameOverModal, setShowGameOverModal] = useState(false);
+  const [sseError, setSseError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
@@ -205,7 +277,9 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   // 用 ref 追踪后端推送的最新数值（避免闭包过期）
   const latestValues = useRef({ npcControlLevel: conversation.npcControlLevel, playerResistance: conversation.playerResistance, turnCount: 0 });
   const lastTrapType = useRef("");
-  const lastAlternatives = useRef<string[]>([]);
+  const lastAlternatives = useRef<{ text: string; rationale: string }[]>([]);
+  // 保存 NPC 开场白，传给 chat 路由以建立连贯情境
+  const openingLineRef = useRef("");
 
   // 自动滚动到底部
   useEffect(() => {
@@ -227,10 +301,13 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
     setIsBattleStart(false);
     setIsNPCGenerating(true);
 
+    // 记录本关场景前提
+    store.setScenarioPremise(currentScenario);
+
     abortRef.current = new AbortController();
 
     try {
-      const playerContext = `玩家心域状态：护盾${sanctuary.shieldHealth}%，植物${sanctuary.plants.length}株。当前作战关卡：第${level}关「${levelConfig.title}」。`;
+      const playerContext = `玩家心域状态：护盾${sanctuary.shieldHealth}%，已装备法器${sanctuary.equippedArtifacts.length}件。当前作战关卡：第${level}关「${levelConfig.title}」。`;
       await generateNPC(playerContext, 1, (event: SSEEvent) => {
         switch (event.type) {
           case "npc_name":
@@ -241,12 +318,18 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
               store.setNPCAttack(event.data);
               // 用 openingLine 作为 NPC 第一句攻击性对话
               if (event.data.openingLine) {
+                openingLineRef.current = event.data.openingLine;
                 addMessageWithId({
                   role: "npc",
                   content: event.data.openingLine,
                   timestamp: Date.now(),
                 });
               }
+            }
+            break;
+          case "knowledge_point":
+            if (event.data) {
+              store.setKnowledgePoint(event.data);
             }
             break;
           case "dialogue_chunk":
@@ -259,19 +342,21 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
             break;
           case "error":
             console.error("NPC生成错误:", event.data);
+            setSseError("NPC 生成失败，请重试");
             setIsNPCGenerating(false);
             store.setPlayerTurn(true);
             setShowIntro(false);
             break;
         }
-      }, abortRef.current.signal, level);
+      }, abortRef.current.signal, level, currentScenario);
     } catch (err) {
       console.error("生成NPC失败:", err);
+      setSseError("网络异常，请检查连接后重试");
       setIsNPCGenerating(false);
       store.setPlayerTurn(true);
       setShowIntro(false);
     }
-  }, [isBattleStart, level, levelConfig, sanctuary, store, addMessageWithId]);
+  }, [isBattleStart, level, levelConfig, sanctuary, store, addMessageWithId, currentScenario]);
 
   // 发送玩家消息
   const handleSend = useCallback(async () => {
@@ -323,10 +408,9 @@ NPC控制等级：${conversation.npcControlLevel}，
               latestValues.current.npcControlLevel = event.data;
               break;
             case "shield_damage": {
-              // 植物锚定减免：植物锚定总值越高，受到的伤害越低
-              const plantDef = sanctuary.plants.reduce((sum, p) => sum + (p.status === PlantStatus.Healthy ? p.anchorStrength : p.anchorStrength * 0.5), 0);
-              const reduction = Math.min(15, plantDef / 10);
-              const actualDamage = Math.min(event.data, event.data + reduction);
+              // 防御减免：已装备法器数量提供锚定减伤（每件 5，上限 15），合并原植物锚定防御
+              const reduction = Math.min(15, sanctuary.equippedArtifacts.length * 5);
+              const actualDamage = Math.max(0, event.data - reduction);
               store.setPlayerResistance(actualDamage);
               latestValues.current.playerResistance = actualDamage;
               if (actualDamage < 30) {
@@ -334,11 +418,9 @@ NPC控制等级：${conversation.npcControlLevel}，
               }
               break;
             }
-            case "plant_status":
-              if (sanctuary.plants.length > 0) {
-                const plant = sanctuary.plants[Math.floor(Math.random() * sanctuary.plants.length)];
-                store.setPlantStatus(plant.id, PlantStatus.Shaking);
-              }
+            case "fog":
+              // 迷雾由后端根据每轮评估驱动（被操控变浓 / 有效应对驱散）
+              store.setFogDensity(event.data);
               break;
             case "assessment": {
               const a = event.data as NPCResponseAssessment;
@@ -348,8 +430,13 @@ NPC控制等级：${conversation.npcControlLevel}，
               const npcMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
               const playerMsg = msgs.length > 1 ? msgs[msgs.length - 2] : undefined;
               if (npcMsg && npcMsg.role === "npc") {
+                // 把本轮「为什么」科普点评挂到这条 NPC 消息上，并收集到本关知识库
+                if (a.whyNote) {
+                  store.setLastMessageEducation(a.whyNote, a.identificationTip);
+                  store.addWhyNote(a.whyNote);
+                }
                 const round: ReviewRound = {
-                  npcMessage: { ...npcMsg, trapType: a.trapType, playerStatus: a.playerStatus, assessment: a.assessment, alternatives: a.alternatives },
+                  npcMessage: { ...npcMsg, trapType: a.trapType, playerStatus: a.playerStatus, assessment: a.assessment, alternatives: a.alternatives, whyNote: a.whyNote, identificationTip: a.identificationTip },
                   playerMessage: playerMsg?.role === "player" ? playerMsg : undefined,
                   assessment: a,
                 };
@@ -416,12 +503,15 @@ NPC控制等级：${conversation.npcControlLevel}，
           levelNpcRole: levelConfig.npcRole,
           levelTactics: levelConfig.tactics.join("、"),
           levelScenario: currentScenario,
+          levelSignals: knowledgePoint.signals || [],
+          openingLine: openingLineRef.current,
         }
       );
       setLastUsedArtifact(null); // 法器信息已发送，清除
     } catch (err: any) {
       if (err.name !== "AbortError") {
         console.error("对话请求失败:", err);
+        setSseError("连接中断，请点击重试按钮继续对话");
       }
       setIsWaiting(false);
       setIsSending(false);
@@ -471,25 +561,32 @@ NPC控制等级：${conversation.npcControlLevel}，
           break;
       }
 
+      // 法器语义反馈文本
+      const artifactMessages: Record<string, string> = {
+        Shield: bonus > 1
+          ? `🛡️ 心盾双倍克制——你觉察到对方正在${trap.includes("煤气灯") ? "否认你的感受" : trap.includes("情感绑架") ? "用情感绑架你" : "操控你"}，护盾帮你稳住自我判断。`
+          : `🛡️ 心盾激活——边界护盾增强，帮你保持冷静面对操控。`,
+        Mirror: bonus > 1
+          ? `🪞 真言镜双倍反射——对方在${trap.includes("模糊逻辑") ? "用模糊逻辑迷惑你" : "扭曲事实"}，镜子帮你照出真相。`
+          : `🪞 真言镜照出真相——让对方的逻辑漏洞暴露无遗。`,
+        Spear: bonus > 1
+          ? `🔱 破谎矛精准命中——对方的${trap || "操控"}在真相面前不堪一击。`
+          : `🔱 破谎矛出击——直接瓦解对方的攻击。`,
+      };
+
       addMessageWithId({
         role: "player",
-        content: `🧿 [使用法器] ${artifact.name}`,
+        content: artifactMessages[artifact.type] || `🧿 [使用法器] ${artifact.name}`,
         timestamp: Date.now(),
       });
 
-      // 法器使用后，增加迷雾密度（NPC反击）
-      store.setFogDensity(sanctuary.fogDensity + 5);
-
-      // 如果迷雾太浓，植物开始受影响
-      if (sanctuary.fogDensity > 60 && sanctuary.plants.length > 0) {
-        const idx = Math.floor(Math.random() * sanctuary.plants.length);
-        const target = sanctuary.plants[idx];
-        if (target.status === PlantStatus.Healthy) {
-          store.setPlantStatus(target.id, PlantStatus.Shaking);
-        } else if (target.status === PlantStatus.Shaking) {
-          store.setPlantStatus(target.id, PlantStatus.Defoliated);
-        }
-      }
+      // 法器使用后驱散迷雾（与后端效果一致，提供即时反馈）：
+      // 盾类（含雾散灯）直接驱散；镜/矛降低操控从而间接驱散
+      const fogReduce =
+        artifact.type === ArtifactType.Shield
+          ? artifact.power
+          : Math.round(artifact.power / 2);
+      store.setFogDensity(Math.max(0, sanctuary.fogDensity - fogReduce));
     },
     [isWaiting, conversation, sanctuary, store, addMessageWithId]
   );
@@ -545,6 +642,16 @@ NPC控制等级：${conversation.npcControlLevel}，
     }
   }, [conversation.messages.length, isWaiting]);
 
+  // 推荐回复：后端生成后用后端；第一轮（玩家尚未发言、无 alternatives）按本关知识点动态生成开口示范兜底
+  const suggestionList: { text: string; rationale: string }[] =
+    lastAlternatives.current.length > 0
+      ? lastAlternatives.current
+      : conversation.turnCount <= 1
+      ? buildOpeningSuggestions(knowledgePoint)
+      : [];
+  const showSuggestions =
+    suggestionList.length > 0 && conversation.isPlayerTurn && !isWaiting && !isNPCGenerating;
+
   return (
     <GestureHandlerRootView style={styles.container}>
       {/* 关卡标题横幅 */}
@@ -554,8 +661,23 @@ NPC控制等级：${conversation.npcControlLevel}，
         </Text>
         <Text style={styles.levelTitle}>{levelConfig.title}</Text>
         <Text style={styles.levelSubtitle}>{levelConfig.subtitle}</Text>
-        <Text style={styles.levelRole}>{levelConfig.npcRole}</Text>
+        <TouchableOpacity
+          style={styles.kpToggle}
+          onPress={() => setShowKp((v) => !v)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.kpToggleText}>
+            📖 本关知识点：{knowledgePoint.tactic} {showKp ? "▲" : "▼"}
+          </Text>
+        </TouchableOpacity>
       </View>
+
+      {/* 知识点卡（可折叠） */}
+      {showKp && (
+        <View style={styles.kpWrap}>
+          <KnowledgeCard kp={knowledgePoint} />
+        </View>
+      )}
 
       <View style={[styles.header]}>
         {/* 心域缩略图 */}
@@ -567,16 +689,16 @@ NPC控制等级：${conversation.npcControlLevel}，
 
         {/* 状态栏 */}
         <View style={styles.statusContainer}>
-          <StatusBarView
+          <ProgressBar
             label="抵抗值"
             value={conversation.playerResistance}
-            color="#4fc3f7"
+            color={palette.blue}
             icon="🛡️"
           />
-          <StatusBarView
+          <ProgressBar
             label="NPC操控"
             value={conversation.npcControlLevel}
-            color="#ef5350"
+            color={palette.clay}
             icon="⚡"
           />
         </View>
@@ -585,27 +707,29 @@ NPC控制等级：${conversation.npcControlLevel}，
         <Text style={styles.turnText}>回合 {conversation.turnCount}</Text>
       </View>
 
-      {/* 植物状态 */}
-      <View style={styles.plantBar}>
-        {sanctuary.plants.map((p) => (
-          <View key={p.id} style={styles.plantBadge}>
-            <Text style={styles.plantIcon}>
-              {p.status === PlantStatus.Healthy ? "🌿" :
-               p.status === PlantStatus.Shaking ? "🌱" :
-               p.status === PlantStatus.Defoliated ? "🍂" : "💀"}
-            </Text>
-            <Text style={[styles.plantName, p.status !== PlantStatus.Healthy && styles.plantNameDamaged]}>
-              {p.name}
-            </Text>
+      {/* 护身符横幅 */}
+      {store.amuletText ? (
+        <View style={styles.amuletBar}>
+          <Text style={styles.amuletIcon}>✍️</Text>
+          <Text style={styles.amuletText}>"{store.amuletText}"</Text>
+        </View>
+      ) : null}
+
+      {/* 场景前提 + 刷新按钮 */}
+      {store.scenarioPremise && (
+        <View style={styles.scenarioBar}>
+          <Text style={styles.scenarioIcon}>🎭</Text>
+          <View style={styles.scenarioTextWrap}>
+            <Text style={styles.scenarioLabel}>场景前提</Text>
+            <Text style={styles.scenarioText}>{store.scenarioPremise}</Text>
           </View>
-        ))}
-        <Text style={styles.plantCount}>×{sanctuary.plants.length}</Text>
-      </View>
+        </View>
+      )}
 
       {/* NPC名称 */}
       {conversation.npcName && (
         <View style={styles.npcTitleBar}>
-          <Text style={styles.npcTitleIcon}>👾</Text>
+          <Text style={styles.npcTitleIcon}>🫥</Text>
           <Text style={styles.npcTitleText}>{conversation.npcName}</Text>
           {isNPCGenerating && (
             <Text style={styles.npcLoading}>召唤中...</Text>
@@ -613,13 +737,30 @@ NPC控制等级：${conversation.npcControlLevel}，
         </View>
       )}
 
+      {/* SSE 错误提示条 */}
+      {sseError && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>⚠️ {sseError}</Text>
+          <TouchableOpacity
+            onPress={() => { setSseError(null); startBattle(); }}
+            style={styles.errorRetryBtn}
+            activeOpacity={0.7}
+            accessibilityLabel="重试连接"
+            accessibilityRole="button"
+          >
+            <Text style={styles.errorRetryText}>重试</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* 新手引导面板 */}
       {showIntro && !isNPCGenerating && (
         <View style={styles.introBanner}>
-          <Text style={styles.introTitle}>💡 新手提示</Text>
+          <Text style={styles.introTitle}>💡 怎么玩</Text>
           <Text style={styles.introText}>
             当前NPC擅长「{levelConfig.tactics.join("、")}」等操控手法。
             在输入框中回应NPC的对话，使用法器抵御侵蚀。
+            每轮 NPC 话术后可点开「为什么这样操控」学习识别要点。
             当NPC操控等级降至0即为胜利！
           </Text>
         </View>
@@ -633,7 +774,7 @@ NPC控制等级：${conversation.npcControlLevel}，
       >
         {conversation.messages.length === 0 && isNPCGenerating && (
           <View style={styles.loadingContainer}>
-            <Text style={styles.loadingText}>👾 操控型NPC正在生成...</Text>
+            <Text style={styles.loadingText}>🫥 操控型NPC正在生成...</Text>
           </View>
         )}
 
@@ -667,22 +808,20 @@ NPC控制等级：${conversation.npcControlLevel}，
         </View>
       )}
 
-      {/* 建议回复选项 */}
-      {lastAlternatives.current.length > 0 && conversation.isPlayerTurn && !isWaiting && !isNPCGenerating && (
+      {/* 建议回复选项：后端有则用之，第一轮尚未生成时给开口示范 */}
+      {showSuggestions && (
         <View style={styles.suggestionsBar}>
-          {lastAlternatives.current.slice(0, 3).map((alt, i) => {
-            // 去掉序号前缀，如 "1. "、"① " 等
-            const cleanAlt = alt.replace(/^\s*(?:\d+[\.、\)\s]|[①②③④⑤])\s*/, "");
-            return (
-              <TouchableOpacity
-                key={i}
-                style={styles.suggestionChip}
-                onPress={() => { setInputText(cleanAlt); }}
-              >
-                <Text style={styles.suggestionText} numberOfLines={3}>{cleanAlt}</Text>
-              </TouchableOpacity>
-            );
-          })}
+          {suggestionList.slice(0, 3).map((alt, i) => (
+            <TouchableOpacity
+              key={i}
+              style={styles.suggestionChip}
+              onPress={() => { setInputText(alt.text); }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.suggestionText} numberOfLines={2}>{alt.text}</Text>
+              <Text style={styles.suggestionRationale} numberOfLines={2}>💡 {alt.rationale}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
       )}
 
@@ -699,7 +838,7 @@ NPC控制等级：${conversation.npcControlLevel}，
               ? "NPC生成中..."
               : `回应${conversation.npcName || "NPC"}...`
           }
-          placeholderTextColor="#666"
+          placeholderTextColor={palette.textFaint}
           editable={!isWaiting && !isNPCGenerating && conversation.isPlayerTurn}
           multiline
           maxLength={500}
@@ -709,30 +848,36 @@ NPC控制等级：${conversation.npcControlLevel}，
             style={[styles.sendBtn, (!inputText.trim() || isWaiting || isNPCGenerating || !conversation.isPlayerTurn) && styles.sendBtnDisabled]}
             onPress={handleSend}
             disabled={!inputText.trim() || isWaiting || isNPCGenerating || !conversation.isPlayerTurn}
+            activeOpacity={0.8}
+            accessibilityLabel="发送消息"
+            accessibilityRole="button"
           >
             <Text style={styles.sendBtnText}>发送</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.skipBtn} onPress={handleSkip}>
-            <Text style={styles.skipBtnText}>跳过 →</Text>
+          <TouchableOpacity onPress={handleSkip} activeOpacity={0.6} accessibilityLabel="跳过当前关卡" accessibilityRole="button" style={styles.skipLinkWrap}>
+            <Text style={styles.skipLink}>跳过</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* 迷雾效果：越危险雾越浓 */}
+      {/* 迷雾效果：越危险雾越浓（温暖柔雾）
+          透明度由后端驱动的 sanctuary.fogDensity 决定（被操控变浓 / 有效应对驱散）。
+          背景色为不透明，opacity 即唯一可见度因子，避免与背景 alpha 相乘导致几乎不可见 */}
       <View
         style={[
           styles.fogOverlay,
           {
-            opacity: Math.min(0.7,
-              (1 - conversation.playerResistance / 100) * 0.35 +
-              (conversation.npcControlLevel / 100) * 0.25 +
-              (sanctuary.plants.filter((p) => p.status !== PlantStatus.Healthy).length /
-                Math.max(sanctuary.plants.length, 1)) * 0.2 +
-              (stormMode ? 0.15 : 0)
+            pointerEvents: "none",
+            opacity: useMemo(
+              () =>
+                Math.min(
+                  0.85,
+                  (sanctuary.fogDensity / 100) * 1.0 + (stormMode ? 0.12 : 0)
+                ),
+              [sanctuary.fogDensity, stormMode]
             ),
           },
         ]}
-        pointerEvents="none"
       />
 
       {/* 临界状态覆盖 */}
@@ -750,7 +895,7 @@ NPC控制等级：${conversation.npcControlLevel}，
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalIcon}>💔</Text>
-            <Text style={[styles.modalTitle, { color: "#ef5350" }]}>心域失守</Text>
+            <Text style={[styles.modalTitle, { color: palette.clay }]}>心域失守</Text>
             <Text style={styles.modalDesc}>
               {conversation.criticalCountdown <= 0
                 ? "你的抵抗在持续的侵蚀下彻底崩溃了。"
@@ -758,11 +903,12 @@ NPC控制等级：${conversation.npcControlLevel}，
               {"\n"}需要进行修复来恢复。
             </Text>
             <TouchableOpacity
-              style={[styles.modalConfirmBtn, { backgroundColor: "#ef5350" }]}
+              style={[styles.modalConfirmBtn, { backgroundColor: palette.clay }]}
               onPress={() => {
                 setShowGameOverModal(false);
                 onComplete?.(false);
               }}
+              activeOpacity={0.85}
             >
               <Text style={styles.modalConfirmText}>进入修复</Text>
             </TouchableOpacity>
@@ -775,17 +921,18 @@ NPC控制等级：${conversation.npcControlLevel}，
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalIcon}>🏆</Text>
-            <Text style={styles.modalTitle}>战斗胜利</Text>
+            <Text style={styles.modalTitle}>守护成功</Text>
             <Text style={styles.modalDesc}>
               你成功抵御了{conversation.npcName}的心理操控！{'\n'}
               是时候修复受损的心域边界了。
             </Text>
             <TouchableOpacity
-              style={styles.modalConfirmBtn}
+              style={[styles.modalConfirmBtn, { backgroundColor: palette.primary }]}
               onPress={() => {
                 setShowVictoryModal(false);
                 onComplete?.(true);
               }}
+              activeOpacity={0.85}
             >
               <Text style={styles.modalConfirmText}>进入修复</Text>
             </TouchableOpacity>
@@ -799,178 +946,237 @@ NPC控制等级：${conversation.npcControlLevel}，
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0d1a",
+    height: "auto",
+    backgroundColor: palette.bg,
     maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
   levelBanner: {
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#1a1a2e",
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: palette.surfaceSoft,
     borderBottomWidth: 1,
-    borderBottomColor: "#7c4dff33",
+    borderBottomColor: palette.border,
   },
   levelLabel: {
-    color: "#7c4dff",
-    fontSize: 11,
-    fontWeight: "600",
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
     letterSpacing: 1,
+    fontFamily,
   },
   levelTitle: {
-    color: "#b388ff",
-    fontSize: 18,
-    fontWeight: "bold",
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
     marginTop: 2,
+    fontFamily,
   },
   levelSubtitle: {
-    color: "#9575cd",
-    fontSize: 12,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     marginTop: 1,
+    fontFamily,
   },
-  levelRole: {
-    color: "#7c4dff",
-    fontSize: 11,
-    marginTop: 2,
-    fontStyle: "italic",
+  kpToggle: {
+    marginTop: space.xs,
+    backgroundColor: palette.surface,
+    borderRadius: radius.pill,
+    paddingVertical: 5,
+    paddingHorizontal: space.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  kpToggleText: {
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+  },
+  kpWrap: {
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: "#1a1a2e",
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: palette.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#2a2a4a",
+    borderBottomColor: palette.border,
   },
   statusContainer: {
     flex: 1,
-    marginLeft: 8,
-    gap: 3,
-  },
-  statusBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  statusIcon: {
-    fontSize: 11,
-  },
-  statusBarTrack: {
-    flex: 1,
-    height: 5,
-    backgroundColor: "#2a2a4a",
-    borderRadius: 3,
-    overflow: "hidden",
-  },
-  statusBarFill: {
-    height: "100%",
-    borderRadius: 3,
-  },
-  statusLabel: {
-    color: "#aaa",
-    fontSize: 9,
-    width: 55,
-    textAlign: "right",
+    marginLeft: space.sm,
+    gap: 4,
   },
   turnText: {
-    color: "#888",
-    fontSize: 11,
-    marginLeft: 6,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    marginLeft: space.xs,
+    fontFamily,
   },
   introBanner: {
-    marginHorizontal: 12,
-    marginTop: 6,
-    padding: 10,
-    backgroundColor: "#1a2a3a",
-    borderRadius: 10,
+    marginHorizontal: space.md,
+    marginTop: space.sm,
+    padding: space.md,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: "#4fc3f733",
+    borderColor: palette.border,
+  },
+  errorBanner: {
+    marginHorizontal: space.md,
+    marginTop: space.sm,
+    padding: space.md,
+    backgroundColor: "rgba(224,176,132,0.18)",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.peach,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  errorBannerText: {
+    color: palette.clay,
+    fontSize: fontSize.body,
+    flex: 1,
+    marginRight: space.sm,
+    fontFamily,
+  },
+  errorRetryBtn: {
+    backgroundColor: palette.primary,
+    paddingVertical: 5,
+    paddingHorizontal: 14,
+    borderRadius: radius.pill,
+  },
+  errorRetryText: {
+    color: palette.surface,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
   introTitle: {
-    color: "#4fc3f7",
-    fontSize: 13,
-    fontWeight: "bold",
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
     marginBottom: 4,
+    fontFamily,
   },
   introText: {
-    color: "#b0d4e8",
-    fontSize: 12,
-    lineHeight: 18,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
   },
-  plantBar: {
+  amuletBar: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    backgroundColor: "#151525",
-    gap: 6,
-    flexWrap: "wrap",
+    marginHorizontal: space.md,
+    marginTop: space.xs,
+    padding: space.sm,
+    backgroundColor: "rgba(224,176,132,0.15)",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: "rgba(224,176,132,0.3)",
+    borderLeftWidth: 3,
+    borderLeftColor: palette.peach,
   },
-  plantBadge: {
+  amuletIcon: {
+    fontSize: fontSize.body,
+    marginRight: space.xs,
+  },
+  amuletText: {
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontFamily,
+    fontStyle: "italic",
+    flex: 1,
+  },
+  scenarioBar: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
+    alignItems: "flex-start",
+    marginHorizontal: space.md,
+    marginTop: space.sm,
+    padding: space.md,
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderLeftWidth: 4,
+    borderLeftColor: palette.peach,
+    ...shadow.soft,
   },
-  plantIcon: {
-    fontSize: 12,
+  scenarioIcon: {
+    fontSize: fontSize.title,
+    marginRight: space.sm,
   },
-  plantName: {
-    color: "#aaddaa",
-    fontSize: 10,
+  scenarioTextWrap: {
+    flex: 1,
   },
-  plantNameDamaged: {
-    color: "#cc8888",
+  scenarioLabel: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: 2,
   },
-  plantCount: {
-    color: "#666",
-    fontSize: 10,
-    marginLeft: 2,
+  scenarioText: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
   },
   npcTitleBar: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    backgroundColor: "#1a1a2e",
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs,
+    backgroundColor: palette.surfaceSoft,
     borderBottomWidth: 1,
-    borderBottomColor: "#ef535033",
+    borderBottomColor: palette.border,
   },
   npcTitleIcon: {
-    fontSize: 16,
-    marginRight: 6,
+    fontSize: fontSize.sub,
+    marginRight: space.xs,
   },
   npcTitleText: {
-    color: "#ef5350",
-    fontSize: 15,
-    fontWeight: "bold",
+    color: palette.clay,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   npcLoading: {
-    color: "#888",
-    fontSize: 11,
-    marginLeft: 6,
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    marginLeft: space.xs,
     fontStyle: "italic",
+    fontFamily,
   },
   messageList: {
     flex: 1,
+    minHeight: 0,
     maxHeight: CHAT_MAX_HEIGHT,
   },
   messageListContent: {
-    padding: 16,
-    paddingBottom: 8,
+    padding: space.md,
+    paddingBottom: space.sm,
   },
   loadingContainer: {
     alignItems: "center",
-    paddingVertical: 40,
+    paddingVertical: space.xl,
   },
   loadingText: {
-    color: "#888",
-    fontSize: 14,
+    color: palette.textSoft,
+    fontSize: fontSize.sub,
+    fontFamily,
   },
   bubbleRow: {
     flexDirection: "row",
-    marginBottom: 12,
+    marginBottom: space.md,
     alignItems: "flex-end",
   },
   playerRow: {
@@ -980,174 +1186,248 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
   },
   npcAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#2a1a1a",
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: palette.surfaceSoft,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 6,
+    marginRight: space.xs,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   npcAvatarText: {
-    fontSize: 14,
+    fontSize: fontSize.sub,
   },
   playerAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#1a1a3a",
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: palette.primary,
     justifyContent: "center",
     alignItems: "center",
-    marginLeft: 6,
+    marginLeft: space.xs,
   },
   playerAvatarText: {
-    fontSize: 14,
+    fontSize: fontSize.sub,
   },
   bubble: {
-    maxWidth: "70%",
-    padding: 10,
-    borderRadius: 12,
+    maxWidth: "74%",
+    padding: space.md,
+    borderRadius: radius.md,
   },
   playerBubble: {
-    backgroundColor: "#1a3a5c",
-    borderBottomRightRadius: 4,
+    backgroundColor: palette.primary,
+    borderBottomRightRadius: 6,
   },
   npcBubble: {
-    backgroundColor: "#2a1a2e",
-    borderBottomLeftRadius: 4,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderBottomLeftRadius: 6,
   },
   bubbleText: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
   },
   playerText: {
-    color: "#b3d9ff",
+    color: palette.surface,
   },
   npcText: {
-    color: "#e0b3e0",
+    color: palette.text,
   },
   cursor: {
-    color: "#7c7cff",
-    fontWeight: "bold",
+    color: palette.primaryDark,
+    fontWeight: fontWeight.bold,
+  },
+  whyNote: {
+    marginTop: space.sm,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  whyHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  whyHeaderText: {
+    color: palette.primaryDark,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+  },
+  whyToggle: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    fontFamily,
+  },
+  whyBody: {
+    marginTop: space.xs,
+  },
+  whyText: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  tipBox: {
+    marginTop: space.xs,
+    backgroundColor: palette.surface,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.peach,
+  },
+  tipLabel: {
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: 2,
+  },
+  tipText: {
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
   },
   suggestionsBar: {
-    backgroundColor: "#151525",
+    backgroundColor: palette.surface,
     borderTopWidth: 1,
-    borderTopColor: "#2a2a4a",
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    borderTopColor: palette.border,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
     gap: 4,
   },
   suggestionChip: {
-    backgroundColor: "#1a2a3a",
-    borderRadius: 12,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
+    paddingVertical: space.xs,
+    paddingHorizontal: space.sm,
     borderWidth: 1,
-    borderColor: "#4fc3f733",
+    borderColor: palette.border,
     marginBottom: 2,
   },
   suggestionText: {
-    color: "#b0d4e8",
-    fontSize: 12,
-    lineHeight: 17,
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
+  },
+  suggestionRationale: {
+    color: palette.green,
+    fontSize: fontSize.caption,
+    lineHeight: 16,
+    marginTop: 3,
+    fontFamily,
   },
   artifactBar: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    backgroundColor: "#1a1a2e",
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs,
+    backgroundColor: palette.surfaceSoft,
     borderTopWidth: 1,
-    borderTopColor: "#2a2a4a",
+    borderTopColor: palette.border,
   },
   artifactBarLabel: {
-    color: "#666",
-    fontSize: 10,
-    marginRight: 6,
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    marginRight: space.sm,
+    fontFamily,
   },
   artifactBtn: {
     width: 68,
     height: 56,
-    backgroundColor: "#2a2a4a",
-    borderRadius: 8,
+    backgroundColor: palette.surface,
+    borderRadius: radius.sm,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 6,
+    marginRight: space.xs,
     padding: 4,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   artifactBtnCooldown: {
     opacity: 0.5,
   },
   artifactBtnDisabled: {
-    opacity: 0.3,
+    opacity: 0.35,
   },
   artifactIcon: {
-    fontSize: 18,
+    fontSize: fontSize.title,
   },
   artifactName: {
-    color: "#ccc",
+    color: palette.textSoft,
     fontSize: 8,
     marginTop: 2,
     textAlign: "center",
+    fontFamily,
   },
   cooldownText: {
-    color: "#ff6b6b",
-    fontSize: 16,
-    fontWeight: "bold",
+    color: palette.clay,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.bold,
     position: "absolute",
     top: 2,
     right: 4,
+    fontFamily,
   },
   inputArea: {
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    backgroundColor: "#1a1a2e",
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
+    backgroundColor: palette.surface,
     borderTopWidth: 1,
-    borderTopColor: "#2a2a4a",
+    borderTopColor: palette.border,
   },
   input: {
-    backgroundColor: "#0d0d1a",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: "#ccc",
-    fontSize: 14,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    color: palette.text,
+    fontSize: fontSize.body,
     maxHeight: 70,
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
+    fontFamily,
   },
   inputButtons: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 5,
-    gap: 8,
+    gap: space.sm,
   },
   sendBtn: {
     flex: 1,
-    backgroundColor: "#4a6fa5",
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: palette.primary,
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
     alignItems: "center",
+    ...shadow.soft,
   },
   sendBtnDisabled: {
-    backgroundColor: "#2a3a5a",
+    backgroundColor: palette.surfaceSoft,
+    shadowOpacity: 0,
   },
   sendBtnText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
-  skipBtn: {
-    backgroundColor: "#2a2a4a",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: "center",
+  skipLinkWrap: {
+    paddingVertical: space.sm,
+    paddingHorizontal: 4,
   },
-  skipBtnText: {
-    color: "#888",
-    fontSize: 13,
+  skipLink: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    fontFamily,
   },
   fogOverlay: {
     position: "absolute",
@@ -1155,7 +1435,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "#1a1a3a",
+    backgroundColor: "rgb(110, 78, 70)",
     zIndex: 50,
   },
   criticalOverlay: {
@@ -1163,64 +1443,70 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    paddingVertical: 6,
-    backgroundColor: "#ef5350cc",
+    paddingVertical: space.xs,
+    backgroundColor: "rgba(201, 123, 110, 0.85)",
     alignItems: "center",
   },
   criticalTitle: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "bold",
+    color: palette.surface,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   criticalText: {
-    color: "#fff",
-    fontSize: 12,
+    color: palette.surface,
+    fontSize: fontSize.caption,
     marginTop: 2,
+    fontFamily,
   },
   // 胜利弹框
   modalOverlay: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "#000000aa",
+    backgroundColor: "rgba(74, 64, 57, 0.45)",
     justifyContent: "center",
     alignItems: "center",
     zIndex: 200,
   },
   modalCard: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 16,
-    padding: 24,
-    marginHorizontal: 40,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.lg,
+    marginHorizontal: space.xl,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#7c4dff44",
+    borderColor: palette.border,
+    ...shadow.lift,
   },
   modalIcon: {
     fontSize: 48,
-    marginBottom: 12,
+    marginBottom: space.sm,
   },
   modalTitle: {
-    color: "#b388ff",
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 8,
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.sm,
+    fontFamily,
   },
   modalDesc: {
-    color: "#aaa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
     textAlign: "center",
-    lineHeight: 20,
-    marginBottom: 20,
+    lineHeight: 22,
+    marginBottom: space.lg,
+    fontFamily,
   },
   modalConfirmBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 8,
-    backgroundColor: "#7c4dff",
+    paddingVertical: space.sm,
+    paddingHorizontal: space.xl,
+    borderRadius: radius.pill,
+    ...shadow.soft,
   },
   modalConfirmText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
 });

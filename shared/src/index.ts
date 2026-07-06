@@ -6,29 +6,6 @@ export enum GamePhase {
 }
 
 // ==================== 心域状态 ====================
-export enum PlantStatus {
-  Healthy = "Healthy",
-  Shaking = "Shaking",
-  Defoliated = "Defoliated",
-  Withered = "Withered",
-}
-
-export enum PlantType {
-  AnchoringVine = "AnchoringVine",
-  CalmingHerb = "CalmingHerb",
-  ThornBarrier = "ThornBarrier",
-}
-
-export interface Plant {
-  id: string;
-  name: string;
-  x: number; // SVG 坐标 0-100
-  y: number; // SVG 坐标 0-100
-  status: PlantStatus;
-  growthProgress: number; // 0-100
-  anchorStrength: number; // 0-100, 锚定边界强度
-}
-
 export enum ArtifactType {
   Shield = "Shield",
   Mirror = "Mirror",
@@ -53,7 +30,6 @@ export enum Weather {
 
 export interface SanctuaryState {
   shieldHealth: number; // 0-100
-  plants: Plant[];
   artifacts: Artifact[];
   equippedArtifacts: Artifact[];
   fogDensity: number; // 0-100
@@ -70,7 +46,10 @@ export interface DialogueMessage {
   trapType?: string; // NPC 操控手法标签
   playerStatus?: "effective" | "shaken" | "trapped"; // 玩家回应状态
   assessment?: string; // 心理分析师点评
-  alternatives?: string[]; // 替代回应建议
+  alternatives?: AlternativeResponse[]; // 替代回应建议
+  // —— 教育化扩展（可选，向后兼容）——
+  whyNote?: string; // 为什么点评：科普本轮操控利用了人的什么心理
+  identificationTip?: string; // 本轮识别要点：可操作的观察线索
 }
 
 export interface ConversationState {
@@ -89,7 +68,6 @@ export enum ArtifactEffect {
   ShieldBoost = "ShieldBoost",
   ControlReduce = "ControlReduce",
   FogClear = "FogClear",
-  PlantRevive = "PlantRevive",
 }
 
 // ==================== 评估维度 ====================
@@ -101,6 +79,11 @@ export interface DimensionScores {
 }
 
 // ==================== NPC 评估 ====================
+export interface AlternativeResponse {
+  text: string;
+  rationale: string;
+}
+
 export interface NPCResponseAssessment {
   trapType: string; // 操控手法类型
   trapAnalysis: string; // 陷阱分析
@@ -108,8 +91,14 @@ export interface NPCResponseAssessment {
   dimensions: DimensionScores; // 四维评分
   nextStrategy: string; // NPC下一轮策略
   nextDialogue: string; // NPC下一轮话术
-  alternatives: string[]; // 替代回应建议
+  alternatives: AlternativeResponse[]; // 替代回应建议（含原因）
   assessment: string; // 心理分析师点评
+  // —— 教育化扩展（可选，向后兼容）——
+  whyNote?: string; // 为什么点评：科普本轮操控利用了人的什么心理
+  identificationTip?: string; // 本轮识别要点：可操作的观察线索
+  knowledgePointId?: string; // 关联知识点 ID
+  progressNote?: string; // 进步对比：与上一轮评分对比的反馈
+  conversationEnded?: boolean; // NPC 是否认输
 }
 
 // ==================== 修复状态 ====================
@@ -226,6 +215,24 @@ export const LEVELS: LevelConfig[] = [
     tactics: ["关怀式质疑", "双重标准", "标签化防御", "预设局限", "反向歧视指控", "刻板印象强化"],
   },
 ];
+
+// ==================== 心理学知识点卡 ====================
+export interface KnowledgePoint {
+  id: string; // 如 "kp-gaslight"
+  tactic: string; // 操控手法名（对应关卡标题）
+  definition: string; // 一句话定义
+  signals: string[]; // 识别信号（3-4 条）
+  healthyResponse: string[]; // 健康应对话术示例（2-3 条）
+  caseStory?: string; // 真实案例小故事
+}
+
+// ==================== 新手引导步骤 ====================
+export interface TutorialStep {
+  id: string;
+  title: string;
+  description: string;
+  icon?: string; // emoji 图标
+}
 
 // ==================== 游戏总体状态 ====================
 export interface GameState {

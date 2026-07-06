@@ -4,6 +4,7 @@ import { View, StyleSheet } from "react-native";
 import HomePage from "./pages/HomePage";
 import GamePage from "./pages/GamePage";
 import GrowthScreen from "./components/GrowthScreen";
+import { rootBackground } from "./theme";
 
 function Root({ children }: { children: React.ReactNode }) {
   return <View style={styles.root}>{children}</View>;
@@ -27,6 +28,7 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0a0a1a",
+    minHeight: "100%",
+    ...rootBackground,
   },
 });

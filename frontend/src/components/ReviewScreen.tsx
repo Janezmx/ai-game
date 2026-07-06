@@ -1,16 +1,23 @@
-import React from "react";
+import React, { useEffect } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Dimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
-
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
+import {
+  palette,
+  radius,
+  space,
+  fontSize,
+  fontWeight,
+  fontFamily,
+  shadow,
+} from "../theme";
+import KnowledgeCard, { getLevelKnowledgePoint, TRAP_EMOJI_MAP } from "./KnowledgeCard";
 
 const STATUS_EMOJI: Record<string, string> = {
   effective: "✅",
@@ -24,17 +31,18 @@ const STATUS_LABEL: Record<string, string> = {
   trapped: "落入陷阱",
 };
 
-const TRAP_EMOJI: Record<string, string> = {
-  煤气灯效应: "💡",
-  职场PUA: "💼",
-  亲情绑架: "👨‍👩‍👧",
-  匿名网络攻击: "👾",
-  隐性歧视: "🎭",
-};
-
+/** 按操控手法中文名匹配 TRAP_EMOJI_MAP 的 id */
 function getTrapEmoji(type: string): string {
-  for (const [key, emoji] of Object.entries(TRAP_EMOJI)) {
-    if (type.includes(key)) return emoji;
+  const idMap: Record<string, string> = {
+    "煤气灯": "kp-gaslight",
+    "职场PUA": "kp-pua",
+    "职场": "kp-pua",
+    "亲情": "kp-family",
+    "网络": "kp-network",
+    "歧视": "kp-bias",
+  };
+  for (const [key, kpId] of Object.entries(idMap)) {
+    if (type.includes(key)) return TRAP_EMOJI_MAP[kpId] || "🎯";
   }
   return "🎯";
 }
@@ -80,8 +88,22 @@ export default function ReviewScreen({
   onComplete: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { review, conversation } = useGameStore();
+  const {
+    review,
+    currentLevel,
+    currentKnowledgePoint,
+    markKnowledgeMastered,
+  } = useGameStore();
   const { rounds, bestScores } = review;
+
+  const knowledgePoint = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
+
+  // 完成本关复盘 → 标记该知识点为已掌握（持久化）
+  useEffect(() => {
+    if (knowledgePoint?.id) {
+      markKnowledgeMastered(knowledgePoint.id);
+    }
+  }, [knowledgePoint, markKnowledgeMastered]);
 
   const avgScore = bestScores
     ? Math.round(
@@ -121,22 +143,22 @@ export default function ReviewScreen({
               <ScoreBar
                 label="边界意识"
                 value={bestScores.boundaryAwareness}
-                color="#4fc3f7"
+                color={palette.blue}
               />
               <ScoreBar
                 label="情绪稳定"
                 value={bestScores.emotionalStability}
-                color="#81c784"
+                color={palette.green}
               />
               <ScoreBar
                 label="认知清晰"
                 value={bestScores.cognitiveClarity}
-                color="#ffb74d"
+                color={palette.peach}
               />
               <ScoreBar
                 label="坚定回应"
                 value={bestScores.assertiveResponse}
-                color="#ef5350"
+                color={palette.clay}
               />
             </View>
           )}
@@ -165,6 +187,10 @@ export default function ReviewScreen({
             </Text>
           </View>
         )}
+
+        {/* 本课知识点沉淀 */}
+        <Text style={styles.sectionTitleLarge}>📖 本课知识点</Text>
+        <KnowledgeCard kp={knowledgePoint} />
 
         {/* 每轮分析 */}
         {rounds.map((round, idx) => (
@@ -231,6 +257,24 @@ export default function ReviewScreen({
                   {getAdvice(round.assessment.playerStatus)}
                 </Text>
 
+                {/* 本轮科普点评（为什么 + 识别要点） */}
+                {round.assessment.whyNote && (
+                  <>
+                    <Text style={styles.sectionLabel}>🔍 本轮科普点评</Text>
+                    <View style={styles.whyBox}>
+                      <Text style={styles.whyText}>{round.assessment.whyNote}</Text>
+                      {round.assessment.identificationTip && (
+                        <View style={styles.tipBox}>
+                          <Text style={styles.tipLabel}>识别要点</Text>
+                          <Text style={styles.tipText}>
+                            {round.assessment.identificationTip}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </>
+                )}
+
                 {/* 维度评分 */}
                 <View style={styles.dimRow}>
                   {Object.entries(round.assessment.dimensions).map(
@@ -253,19 +297,32 @@ export default function ReviewScreen({
 
                 {/* 替代回应 */}
                 <Text style={styles.sectionLabel}>🔄 更好的回应方式</Text>
-                {round.assessment.alternatives.map((alt, i) => (
-                  <View key={i} style={styles.altItem}>
-                    <Text style={styles.altNum}>{i + 1}.</Text>
-                    <Text style={styles.altText}>{alt}</Text>
+                {round.assessment.alternatives?.length ? (
+                  round.assessment.alternatives.map((alt, i) => (
+                    <View key={i} style={styles.altItem}>
+                      <Text style={styles.altNum}>{i + 1}.</Text>
+                      <View style={styles.altTextWrap}>
+                        <Text style={styles.altText}>{alt.text}</Text>
+                        <Text style={styles.altRationale}>💡 {alt.rationale}</Text>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.emptyHint}>暂无建议</Text>
+                )}
+                {/* 进步对比 */}
+                {round.assessment?.progressNote && (
+                  <View style={styles.progressNote}>
+                    <Text style={styles.progressNoteText}>{round.assessment.progressNote}</Text>
                   </View>
-                ))}
+                )}
               </>
             )}
           </View>
         ))}
       </ScrollView>
 
-      <TouchableOpacity style={styles.completeBtn} onPress={onComplete}>
+      <TouchableOpacity style={styles.completeBtn} onPress={onComplete} activeOpacity={0.85} accessibilityLabel="完成复盘，进入修复" accessibilityRole="button">
         <Text style={styles.completeBtnText}>进入修复 →</Text>
       </TouchableOpacity>
     </View>
@@ -273,34 +330,45 @@ export default function ReviewScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#0d0d1a", maxWidth: 500, width: "100%", alignSelf: "center" },
+  container: {
+    display: "flex",
+    flexDirection: "column",
+    height: "100vh",
+    backgroundColor: palette.bg,
+    maxWidth: 500,
+    width: "100%",
+    alignSelf: "center",
+  },
   title: {
-    color: "#b388ff",
-    fontSize: 22,
-    fontWeight: "bold",
+    color: palette.primaryDark,
+    fontSize: fontSize.heading,
+    fontWeight: fontWeight.bold,
     textAlign: "center",
-    marginTop: 8,
+    marginTop: space.sm,
+    fontFamily,
   },
   subtitle: {
-    color: "#8888aa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: space.md,
+    fontFamily,
   },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 24 },
+  scrollContent: { padding: space.md, paddingBottom: space.xl },
   summaryCard: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.lg,
+    marginBottom: space.md,
     borderWidth: 1,
-    borderColor: "#7c4dff33",
+    borderColor: palette.border,
     alignItems: "center",
+    ...shadow.soft,
   },
-  summaryScore: { color: "#b388ff", fontSize: 48, fontWeight: "bold" },
-  summaryLabel: { color: "#888", fontSize: 13, marginBottom: 2 },
-  summarySub: { color: "#666", fontSize: 12, marginBottom: 12 },
+  summaryScore: { color: palette.primaryDark, fontSize: 48, fontWeight: fontWeight.bold, fontFamily },
+  summaryLabel: { color: palette.textSoft, fontSize: fontSize.caption, marginBottom: 2, fontFamily },
+  summarySub: { color: palette.textFaint, fontSize: fontSize.caption, marginBottom: space.md, fontFamily },
   bestScoresRow: { width: "100%", gap: 4 },
   scoreRow: {
     flexDirection: "row",
@@ -308,136 +376,217 @@ const styles = StyleSheet.create({
     gap: 6,
     marginVertical: 1,
   },
-  scoreLabel: { color: "#aaa", fontSize: 11, width: 56 },
+  scoreLabel: { color: palette.textSoft, fontSize: fontSize.caption, width: 56, fontFamily },
   scoreTrack: {
     flex: 1,
     height: 6,
-    backgroundColor: "#2a2a4a",
-    borderRadius: 3,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.pill,
     overflow: "hidden",
   },
-  scoreFill: { height: "100%", borderRadius: 3 },
+  scoreFill: { height: "100%", borderRadius: radius.pill },
   scoreValue: {
-    color: "#aaa",
-    fontSize: 11,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     width: 28,
     textAlign: "right",
+    fontFamily,
   },
   conclusionCard: {
-    backgroundColor: "#1a2a1e",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.lg,
+    padding: space.md,
+    marginBottom: space.md,
     borderWidth: 1,
-    borderColor: "#81c78433",
+    borderColor: palette.border,
   },
   conclusionTitle: {
-    color: "#81c784",
-    fontSize: 16,
-    fontWeight: "bold",
-    marginBottom: 6,
+    color: palette.green,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.xs,
+    fontFamily,
   },
   conclusionText: {
-    color: "#aaccaa",
-    fontSize: 13,
-    lineHeight: 20,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  sectionTitleLarge: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.sm,
+    marginTop: space.sm,
+    fontFamily,
   },
   roundCard: {
-    backgroundColor: "#151525",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.md,
+    marginBottom: space.md,
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
+    ...shadow.soft,
   },
   roundHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: space.sm,
   },
-  roundTitle: { color: "#b388ff", fontSize: 14, fontWeight: "bold" },
+  roundTitle: { color: palette.primaryDark, fontSize: fontSize.sub, fontWeight: fontWeight.bold, fontFamily },
   statusBadge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: space.sm,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: radius.sm,
   },
-  statusEffective: { backgroundColor: "#1a3a2a" },
-  statusShaken: { backgroundColor: "#3a3a1a" },
-  statusTrapped: { backgroundColor: "#3a1a1a" },
-  statusText: { color: "#ddd", fontSize: 11 },
+  statusEffective: { backgroundColor: "rgba(136,168,120,0.18)" },
+  statusShaken: { backgroundColor: "rgba(224,176,132,0.22)" },
+  statusTrapped: { backgroundColor: "rgba(201,123,110,0.22)" },
+  statusText: { color: palette.text, fontSize: fontSize.caption, fontFamily },
   sectionLabel: {
-    color: "#888",
-    fontSize: 11,
-    marginTop: 8,
-    marginBottom: 4,
-    fontWeight: "600",
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    marginTop: space.sm,
+    marginBottom: space.xs,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
   npcBubble: {
-    backgroundColor: "#2a1a1a",
-    padding: 10,
-    borderRadius: 8,
+    backgroundColor: palette.surfaceSoft,
+    padding: space.sm,
+    borderRadius: radius.sm,
     borderLeftWidth: 3,
-    borderLeftColor: "#ef5350",
+    borderLeftColor: palette.clay,
   },
-  npcText: { color: "#e0c0c0", fontSize: 13, lineHeight: 20 },
+  npcText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 20, fontFamily },
   playerBubble: {
-    backgroundColor: "#1a2a3a",
-    padding: 10,
-    borderRadius: 8,
+    backgroundColor: palette.surfaceSoft,
+    padding: space.sm,
+    borderRadius: radius.sm,
     borderLeftWidth: 3,
-    borderLeftColor: "#4fc3f7",
+    borderLeftColor: palette.blue,
   },
-  playerText: { color: "#c0d0e0", fontSize: 13, lineHeight: 20 },
-  trapRow: { flexDirection: "row", marginTop: 6, gap: 6 },
-  trapTag: { color: "#ffb74d", fontSize: 12, fontWeight: "600" },
+  playerText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 20, fontFamily },
+  trapRow: { flexDirection: "row", marginTop: space.xs, gap: space.xs },
+  trapTag: { color: palette.peach, fontSize: fontSize.body, fontWeight: fontWeight.semibold, fontFamily },
   analysisText: {
-    color: "#aaa",
-    fontSize: 12,
-    lineHeight: 18,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
   },
   adviceText: {
-    color: "#81c784",
-    fontSize: 12,
-    lineHeight: 18,
+    color: palette.green,
+    fontSize: fontSize.body,
+    lineHeight: 20,
     fontStyle: "italic",
+    fontFamily,
+  },
+  whyBox: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.peach,
+  },
+  whyText: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  tipBox: {
+    marginTop: space.xs,
+    backgroundColor: palette.surface,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.blue,
+  },
+  tipLabel: {
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    marginBottom: 2,
+    fontFamily,
+  },
+  tipText: {
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
   },
   dimRow: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 8,
+    gap: space.xs,
+    marginTop: space.sm,
     justifyContent: "center",
   },
   dimItem: {
-    backgroundColor: "#1a1a2e",
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+    backgroundColor: palette.surfaceSoft,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
+    borderRadius: radius.sm,
     alignItems: "center",
     flex: 1,
   },
-  dimValue: { color: "#b388ff", fontSize: 16, fontWeight: "bold" },
-  dimLabel: { color: "#888", fontSize: 10, marginTop: 2 },
+  dimValue: { color: palette.primaryDark, fontSize: fontSize.sub, fontWeight: fontWeight.bold, fontFamily },
+  dimLabel: { color: palette.textFaint, fontSize: fontSize.caption, marginTop: 2, fontFamily },
   altItem: {
     flexDirection: "row",
     gap: 4,
-    marginTop: 4,
+    marginTop: space.xs,
     paddingLeft: 4,
   },
-  altNum: { color: "#81c784", fontSize: 12, width: 16 },
+  altNum: { color: palette.green, fontSize: fontSize.body, width: 16, fontFamily },
+  altTextWrap: { flex: 1 },
   altText: {
-    color: "#aaccaa",
-    fontSize: 12,
-    lineHeight: 18,
-    flex: 1,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
+  },
+  altRationale: {
+    color: palette.blue,
+    fontSize: fontSize.caption,
+    lineHeight: 16,
+    marginTop: 2,
+    fontFamily,
+  },
+  progressNote: {
+    marginTop: space.sm,
+    backgroundColor: "rgba(167,196,212,0.15)",
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.blue,
+  },
+  progressNoteText: {
+    color: palette.blue,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
+  },
+  emptyHint: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    fontStyle: "italic",
+    fontFamily,
+    marginTop: space.xs,
   },
   completeBtn: {
-    backgroundColor: "#7c4dff",
-    marginHorizontal: 16,
-    marginBottom: 16,
-    paddingVertical: 14,
-    borderRadius: 10,
+    backgroundColor: palette.primary,
+    marginHorizontal: space.md,
+    marginBottom: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
     alignItems: "center",
+    ...shadow.soft,
   },
-  completeBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  completeBtnText: { color: palette.surface, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, fontFamily },
 });

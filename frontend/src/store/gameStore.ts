@@ -1,10 +1,8 @@
 import { create } from "zustand";
 import {
   GamePhase,
-  PlantStatus,
   ArtifactType,
   Weather,
-  Plant,
   Artifact,
   DialogueMessage,
   ConversationState,
@@ -18,29 +16,52 @@ import {
   GameRecord,
   Badge,
   ALL_BADGES,
+  KnowledgePoint,
 } from "@aigame/shared";
 
-// ==================== 初始数据 ====================
+// ==================== 教育内容持久化（localStorage） ====================
+const EDU_STORAGE_KEY = "aigame-edu";
 
-/** 根据关卡生成植物（越高级越少、越弱） */
-function createPlantsForLevel(level: number): Plant[] {
-  const allPlants = [
-    { id: "p1", name: "铁木树", anchorStrength: 70 },
-    { id: "p2", name: "净化藤", anchorStrength: 50 },
-    { id: "p3", name: "安神草", anchorStrength: 40 },
-    { id: "p4", name: "守护竹", anchorStrength: 60 },
-  ];
-  const count = Math.max(2, 5 - level); // Lv1:4, Lv2:3, Lv3:3, Lv4:2, Lv5:2
-  return allPlants.slice(0, count).map((p, i) => ({
-    id: p.id,
-    name: p.name,
-    x: 25 + i * 15,
-    y: 30 + (i % 2) * 25,
-    status: PlantStatus.Healthy,
-    growthProgress: Math.max(40, 80 - level * 8),
-    anchorStrength: Math.max(20, p.anchorStrength - (level - 1) * 5),
-  }));
+interface PersistedEdu {
+  masteredKnowledgePointIds: string[];
+  hasSeenTutorial: boolean;
 }
+
+function loadEdu(): PersistedEdu {
+  try {
+    const raw = localStorage.getItem(EDU_STORAGE_KEY);
+    if (!raw) return { masteredKnowledgePointIds: [], hasSeenTutorial: false };
+    const p = JSON.parse(raw);
+    return {
+      masteredKnowledgePointIds: Array.isArray(p.masteredKnowledgePointIds) ? p.masteredKnowledgePointIds : [],
+      hasSeenTutorial: !!p.hasSeenTutorial,
+    };
+  } catch {
+    return { masteredKnowledgePointIds: [], hasSeenTutorial: false };
+  }
+}
+
+function saveEdu(mastered: string[], hasSeenTutorial: boolean) {
+  try {
+    localStorage.setItem(
+      EDU_STORAGE_KEY,
+      JSON.stringify({ masteredKnowledgePointIds: mastered, hasSeenTutorial })
+    );
+  } catch {
+    // localStorage 不可用时静默跳过
+  }
+}
+
+/** 关卡切换时清空的本关临时教育数据 */
+function freshLevelEducation() {
+  return {
+    currentKnowledgePoint: null as KnowledgePoint | null,
+    scenarioPremise: "",
+    collectedWhyNotes: [] as string[],
+  };
+}
+
+// ==================== 初始数据 ====================
 
 function createInitialArtifacts(): Artifact[] {
   return [
@@ -54,7 +75,6 @@ function createInitialArtifacts(): Artifact[] {
 function createInitialSanctuary(level = 1): SanctuaryState {
   return {
     shieldHealth: Math.max(60, 100 - (level - 1) * 10),
-    plants: createPlantsForLevel(level),
     artifacts: createInitialArtifacts(),
     equippedArtifacts: createInitialArtifacts().slice(0, 3),
     fogDensity: (level - 1) * 5,
@@ -138,10 +158,6 @@ export interface GameStore {
 
   // 心域操作
   setShieldHealth: (v: number) => void;
-  addPlant: (plant: Plant) => void;
-  removePlant: (plantId: string) => void;
-  setPlantStatus: (plantId: string, status: PlantStatus) => void;
-  setPlantGrowth: (plantId: string, progress: number) => void;
   setFogDensity: (v: number) => void;
   setWeather: (w: Weather) => void;
 
@@ -156,8 +172,11 @@ export interface GameStore {
   updateLastMessage: (chunk: string) => void;
   setPlayerResistance: (v: number) => void;
   setNPCAttack: (attack: string) => void;
+  setLastMessageEducation: (whyNote: string, tip?: string) => void;
+  npcAttack: string;
   setNpcControlLevel: (v: number) => void;
   setPlayerTurn: (v: boolean) => void;
+  isGameOver: boolean;
   setGameOver: (v: boolean) => void;
   incrementTurn: () => void;
   setCritical: (v: boolean) => void;
@@ -179,6 +198,21 @@ export interface GameStore {
   badges: Badge[];
   addGameRecord: (record: GameRecord) => void;
   unlockBadge: (badgeId: string) => void;
+
+  // 教育内容
+  currentKnowledgePoint: KnowledgePoint | null; // 本关知识点卡
+  masteredKnowledgePointIds: string[];           // 已掌握知识点（持久化）
+  hasSeenTutorial: boolean;                       // 是否看过新手引导（持久化）
+  scenarioPremise: string;                        // 当前关卡场景前提
+  collectedWhyNotes: string[];                    // 本关收集的"为什么"科普点评
+
+  setKnowledgePoint: (kp: KnowledgePoint) => void;
+  markKnowledgeMastered: (id: string) => void;
+  setHasSeenTutorial: (v: boolean) => void;
+  setScenarioPremise: (text: string) => void;
+  amuletText: string;
+  setAmuletText: (text: string) => void;
+  addWhyNote: (note: string) => void;
 }
 
 // ==================== Store 实现 ====================
@@ -193,6 +227,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   gameHistory: [],
   badges: createInitialBadges(),
   currentRoundIndex: 0,
+  npcAttack: "",
+  isGameOver: false,
+
+  // 教育内容初始状态（已掌握知识点 / 教程标记从 localStorage 恢复）
+  currentKnowledgePoint: null,
+  masteredKnowledgePointIds: loadEdu().masteredKnowledgePointIds,
+  hasSeenTutorial: loadEdu().hasSeenTutorial,
+  scenarioPremise: "",
+  amuletText: "",
+  collectedWhyNotes: [],
 
   // 关卡管理
   currentLevel: 1,
@@ -206,6 +250,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentLevel: next,
       conversation: createInitialConversation(next),
       currentRoundIndex: 0,
+      ...freshLevelEducation(),
     });
     return next;
   },
@@ -219,6 +264,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       review: createInitialReview(),
       currentRoundIndex: 0,
       phase: GamePhase.SanctuaryPrep,
+      ...freshLevelEducation(),
     }),
 
   resetForLevel: (level: number) =>
@@ -229,6 +275,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       review: createInitialReview(),
       currentRoundIndex: 0,
       phase: GamePhase.SanctuaryPrep,
+      ...freshLevelEducation(),
     }),
 
   // === 阶段管理 ===
@@ -237,37 +284,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   // === 心域 ===
   setShieldHealth: (v) =>
     set((s) => ({ sanctuary: { ...s.sanctuary, shieldHealth: Math.max(0, Math.min(100, v)) } })),
-
-  addPlant: (plant) =>
-    set((s) => ({ sanctuary: { ...s.sanctuary, plants: [...s.sanctuary.plants, plant] } })),
-
-  removePlant: (plantId) =>
-    set((s) => ({
-      sanctuary: {
-        ...s.sanctuary,
-        plants: s.sanctuary.plants.filter((p) => p.id !== plantId),
-      },
-    })),
-
-  setPlantStatus: (plantId, status) =>
-    set((s) => ({
-      sanctuary: {
-        ...s.sanctuary,
-        plants: s.sanctuary.plants.map((p) =>
-          p.id === plantId ? { ...p, status } : p
-        ),
-      },
-    })),
-
-  setPlantGrowth: (plantId, progress) =>
-    set((s) => ({
-      sanctuary: {
-        ...s.sanctuary,
-        plants: s.sanctuary.plants.map((p) =>
-          p.id === plantId ? { ...p, growthProgress: progress } : p
-        ),
-      },
-    })),
 
   setFogDensity: (v) =>
     set((s) => ({ sanctuary: { ...s.sanctuary, fogDensity: Math.max(0, Math.min(100, v)) } })),
@@ -344,7 +360,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setNPCAttack: (attack) =>
     set((s) => ({
       conversation: { ...s.conversation },
+      npcAttack: attack,
     })),
+
+  setLastMessageEducation: (whyNote, tip) =>
+    set((s) => {
+      const msgs = [...s.conversation.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "npc") {
+        msgs[msgs.length - 1] = {
+          ...last,
+          whyNote,
+          identificationTip: tip ?? last.identificationTip,
+        };
+      }
+      return { conversation: { ...s.conversation, messages: msgs } };
+    }),
 
   setNpcControlLevel: (v) =>
     set((s) => ({
@@ -357,7 +388,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setPlayerTurn: (v) =>
     set((s) => ({ conversation: { ...s.conversation, isPlayerTurn: v } })),
 
-  setGameOver: (v) => set((s) => ({ conversation: { ...s.conversation } })),
+  setGameOver: (v) => set((s) => ({ conversation: { ...s.conversation }, isGameOver: v })),
 
   incrementTurn: () =>
     set((s) => ({
@@ -418,4 +449,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
         b.id === badgeId && !b.unlockedAt ? { ...b, unlockedAt: Date.now() } : b
       ),
     })),
+
+  // === 教育内容 ===
+  setKnowledgePoint: (kp) => set({ currentKnowledgePoint: kp }),
+
+  markKnowledgeMastered: (id) =>
+    set((s) => {
+      if (s.masteredKnowledgePointIds.includes(id)) return s;
+      const next = [...s.masteredKnowledgePointIds, id];
+      saveEdu(next, s.hasSeenTutorial);
+      return { masteredKnowledgePointIds: next };
+    }),
+
+  setHasSeenTutorial: (v) =>
+    set((s) => {
+      saveEdu(s.masteredKnowledgePointIds, v);
+      return { hasSeenTutorial: v };
+    }),
+
+  setScenarioPremise: (text) => set({ scenarioPremise: text }),
+
+  setAmuletText: (text) => set({ amuletText: text }),
+
+  addWhyNote: (note) =>
+    set((s) => {
+      if (!note || s.collectedWhyNotes.includes(note)) return s;
+      return { collectedWhyNotes: [...s.collectedWhyNotes, note] };
+    }),
 }));

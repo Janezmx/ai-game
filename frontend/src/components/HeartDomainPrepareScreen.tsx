@@ -23,7 +23,9 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
-import { PlantStatus, ArtifactType, Artifact, Plant, GamePhase } from "@aigame/shared";
+import { ArtifactType, Artifact, GamePhase } from "@aigame/shared";
+import KnowledgeCard, { getLevelKnowledgePoint } from "./KnowledgeCard";
+import { palette, radius, space, fontSize, fontWeight, fontFamily, shadow } from "../theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const SVG_SIZE = Math.min(SCREEN_WIDTH - 40, 300);
@@ -32,28 +34,26 @@ const CENTER = SVG_SIZE / 2;
 // ==================== 心域可视化 ====================
 function HeartDomainSVG({
   shieldHealth,
-  plants,
   fogDensity,
   activeArtifactType,
 }: {
   shieldHealth: number;
-  plants: Plant[];
   fogDensity: number;
   activeArtifactType: ArtifactType | null;
 }) {
   const shieldScale = 0.6 + (shieldHealth / 100) * 0.4;
-  const fogOpacity = fogDensity / 100;
+  const fogOpacity = 0.15 + (fogDensity / 100) * 0.6;
 
   return (
     <Svg width={SVG_SIZE} height={SVG_SIZE} viewBox={`0 0 100 100`}>
       <Defs>
         <LinearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0%" stopColor="#4a9eff" stopOpacity={0.5} />
-          <Stop offset="100%" stopColor="#7c7cff" stopOpacity={0.3} />
+          <Stop offset="0%" stopColor={palette.blue} stopOpacity={0.5} />
+          <Stop offset="100%" stopColor={palette.primary} stopOpacity={0.3} />
         </LinearGradient>
         <LinearGradient id="fogGrad" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0%" stopColor="#666" stopOpacity={fogOpacity} />
-          <Stop offset="100%" stopColor="#444" stopOpacity={fogOpacity * 0.5} />
+          <Stop offset="0%" stopColor={palette.fog} stopOpacity={fogOpacity} />
+          <Stop offset="100%" stopColor={palette.fog} stopOpacity={fogOpacity * 0.5} />
         </LinearGradient>
       </Defs>
 
@@ -63,7 +63,7 @@ function HeartDomainSVG({
         cy={50}
         r={45 * shieldScale}
         fill="none"
-        stroke="#4a9eff"
+        stroke={palette.blue}
         strokeWidth={3}
         strokeOpacity={0.6 + (shieldHealth / 100) * 0.4}
       />
@@ -81,32 +81,11 @@ function HeartDomainSVG({
           cy={50}
           r={45 * shieldScale + 3}
           fill="none"
-          stroke="#fff"
+          stroke={palette.surface}
           strokeWidth={2}
           strokeOpacity={0.6}
         />
       )}
-
-      {/* 植物 */}
-      {plants.map((plant) => (
-        <G key={plant.id}>
-          <Circle
-            cx={plant.x}
-            cy={plant.y}
-            r={4}
-            fill={plant.status === PlantStatus.Healthy ? "#4caf50" : plant.status === PlantStatus.Shaking ? "#ff9800" : "#9e9e9e"}
-          />
-          <Circle
-            cx={plant.x}
-            cy={plant.y}
-            r={6}
-            fill="none"
-            stroke={plant.status === PlantStatus.Healthy ? "#4caf50" : "#ff9800"}
-            strokeWidth={1}
-            strokeDasharray={plant.status === PlantStatus.Shaking ? "2,2" : "0"}
-          />
-        </G>
-      ))}
 
       {/* 迷雾覆盖 */}
       <Circle cx={50} cy={50} r={48} fill="url(#fogGrad)" />
@@ -150,21 +129,27 @@ function ArtifactCard({
   );
 }
 
-// ==================== 植物卡片 ====================
-function PlantCard({
-  plant,
-  onPlant,
-}: {
-  plant: { id: string; name: string; icon: string; description: string };
-  onPlant: (plant: { id: string; name: string; icon: string; description: string }) => void;
-}) {
-  return (
-    <TouchableOpacity style={styles.plantCard} onPress={() => onPlant(plant)}>
-      <Text style={styles.plantIcon}>{plant.icon}</Text>
-      <Text style={styles.plantName}>{plant.name}</Text>
-    </TouchableOpacity>
-  );
-}
+// ==================== 进入对话前的概念介绍 ====================
+const CONCEPTS: { id: string; icon: string; title: string; desc: string }[] = [
+  {
+    id: "amulet",
+    icon: "🪬",
+    title: "护身符文字",
+    desc: "写下一句能稳住你的话。对话中被绕晕时，它就是你的锚点，提醒你「我的边界不容侵犯」。",
+  },
+  {
+    id: "fog",
+    icon: "🌫️",
+    title: "迷雾密度",
+    desc: "代表操控话术带来的困惑。迷雾越浓，越难看清对方套路、护盾也越脆弱；用呼吸引导或法器可驱散它。",
+  },
+  {
+    id: "artifact",
+    icon: "🛡️",
+    title: "法器装备",
+    desc: "你带入对话的心理防御道具。盾/镜/矛各有守护之力，装备后能在关键时刻帮你守住边界。",
+  },
+];
 
 // ==================== 主组件 ====================
 
@@ -179,46 +164,21 @@ export default function HeartDomainPrepareScreen({
   const {
     sanctuary,
     setPhase,
-    addPlant,
     setShieldHealth,
     setFogDensity,
     equipArtifact,
     useArtifact,
+    currentKnowledgePoint,
+    currentLevel,
+    setAmuletText: storeSetAmuletText,
   } = useGameStore();
 
+  // 本关知识点：优先用 NPC 生成（含真实案例），否则用静态兜底
+  const knowledgePoint = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
+
   const [amuletText, setAmuletText] = useState("");
-  const [showPlantModal, setShowPlantModal] = useState(false);
   const [showArtifactModal, setShowArtifactModal] = useState(false);
   const [activeArtifactType, setActiveArtifactType] = useState<ArtifactType | null>(null);
-
-  // 可用植物种子列表
-  const availablePlants = [
-    { id: "seed1", name: "铁木树", icon: "🌳", description: "强化边界锚定" },
-    { id: "seed2", name: "净化藤", icon: "🌿", description: "净化负面情绪" },
-    { id: "seed3", name: "安神草", icon: "🌱", description: "稳定心神" },
-    { id: "seed4", name: "守护竹", icon: "🎋", description: "提升护盾强度" },
-  ];
-
-  // 种植植物
-  const handlePlant = useCallback(
-    (seed: { id: string; name: string; icon: string; description: string }) => {
-      // 在随机空闲位置种植
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 20 + Math.random() * 20;
-      const newPlant: Plant = {
-        id: `plant-${Date.now()}`,
-        name: seed.name,
-        x: 50 + Math.cos(angle) * dist,
-        y: 50 + Math.sin(angle) * dist,
-        status: PlantStatus.Healthy,
-        growthProgress: 10,
-        anchorStrength: 30,
-      };
-      addPlant(newPlant);
-      setShowPlantModal(false);
-    },
-    [addPlant]
-  );
 
   // 装备法器
   const handleEquip = useCallback(
@@ -241,9 +201,10 @@ export default function HeartDomainPrepareScreen({
 
   // 进入下一阶段
   const handleStartBattle = useCallback(() => {
+    storeSetAmuletText(amuletText);
     setPhase(GamePhase.DialogueBattle);
     onComplete?.();
-  }, [setPhase, onComplete]);
+  }, [setPhase, onComplete, storeSetAmuletText, amuletText]);
 
   return (
     <GestureHandlerRootView style={[styles.container, { paddingTop: insets.top }]}>
@@ -256,11 +217,32 @@ export default function HeartDomainPrepareScreen({
           </Text>
         </View>
 
+        {/* 课程导入：本关知识点卡 */}
+        <View style={styles.knowledgeIntro}>
+          <Text style={styles.knowledgeIntroLabel}>📚 课前导读 · 这一关要学会识别</Text>
+          <KnowledgeCard kp={knowledgePoint} />
+        </View>
+
+        {/* 概念介绍：进入对话前认识三个核心元素 */}
+        <View style={styles.conceptIntro}>
+          <Text style={styles.conceptIntroLabel}>💡 进入对话前，先认识三个伙伴</Text>
+          {CONCEPTS.map((c) => (
+            <View key={c.id} style={styles.conceptItem}>
+              <Text style={styles.conceptIcon}>{c.icon}</Text>
+              <View style={styles.conceptBody}>
+                <Text style={styles.conceptTitle}>{c.title}</Text>
+                <Text style={styles.conceptDesc}>{c.desc}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+
+
+
         {/* 心域可视化 */}
         <View style={styles.domainContainer}>
           <HeartDomainSVG
             shieldHealth={sanctuary.shieldHealth}
-            plants={sanctuary.plants}
             fogDensity={sanctuary.fogDensity}
             activeArtifactType={activeArtifactType}
           />
@@ -271,10 +253,6 @@ export default function HeartDomainPrepareScreen({
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.shieldHealth}</Text>
             <Text style={styles.statLabel}>护盾强度</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statValue}>{sanctuary.plants.length}</Text>
-            <Text style={styles.statLabel}>植物数量</Text>
           </View>
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.fogDensity}</Text>
@@ -297,7 +275,7 @@ export default function HeartDomainPrepareScreen({
             value={amuletText}
             onChangeText={setAmuletText}
             placeholder="例如：我的边界不容侵犯…"
-            placeholderTextColor="#555"
+            placeholderTextColor={palette.textFaint}
             multiline
             maxLength={100}
           />
@@ -305,14 +283,6 @@ export default function HeartDomainPrepareScreen({
 
         {/* 快速操作 */}
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => setShowPlantModal(true)}
-          >
-            <Text style={styles.actionIcon}>🌱</Text>
-            <Text style={styles.actionLabel}>种植植物</Text>
-          </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={() => setShowArtifactModal(true)}
@@ -329,36 +299,6 @@ export default function HeartDomainPrepareScreen({
           </Text>
         </TouchableOpacity>
       </ScrollView>
-
-      {/* 种植植物 Modal */}
-      <Modal
-        visible={showPlantModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowPlantModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>🌱 选择植物</Text>
-            <Text style={styles.modalHint}>
-              植物可以增强心域边界锚定
-            </Text>
-            {availablePlants.map((plant) => (
-              <PlantCard
-                key={plant.id}
-                plant={plant}
-                onPlant={handlePlant}
-              />
-            ))}
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setShowPlantModal(false)}
-            >
-              <Text style={styles.modalCloseBtnText}>取消</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* 装备法器 Modal */}
       <Modal
@@ -406,169 +346,229 @@ export default function HeartDomainPrepareScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0d1a",
+    backgroundColor: palette.bg,
     maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
   scrollContent: {
-    padding: 16,
+    padding: space.md,
     paddingBottom: 40,
   },
   header: {
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: space.md,
   },
   title: {
-    color: "#e0e0ff",
-    fontSize: 26,
-    fontWeight: "bold",
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   subtitle: {
-    color: "#8888aa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     textAlign: "center",
     marginTop: 6,
     lineHeight: 20,
   },
+  knowledgeIntro: {
+    marginBottom: space.lg,
+  },
+  knowledgeIntroLabel: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: space.sm,
+  },
+  // ===== 概念介绍 =====
+  conceptIntro: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.lg,
+    padding: space.md,
+    marginBottom: space.lg,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  conceptIntroLabel: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: space.sm,
+  },
+  conceptItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: space.sm,
+  },
+  conceptIcon: {
+    fontSize: 24,
+    marginRight: 12,
+    marginTop: 2,
+  },
+  conceptBody: {
+    flex: 1,
+  },
+  conceptTitle: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: 2,
+  },
+  conceptDesc: {
+    color: palette.textSoft,
+    fontSize: 12,
+    lineHeight: 18,
+  },
   domainContainer: {
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: space.md,
   },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-around",
-    marginBottom: 20,
+    marginBottom: space.lg,
   },
   statBox: {
     alignItems: "center",
   },
   statValue: {
-    color: "#e0e0ff",
+    color: palette.text,
     fontSize: 22,
-    fontWeight: "bold",
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   statLabel: {
-    color: "#8888aa",
+    color: palette.textSoft,
     fontSize: 11,
     marginTop: 2,
   },
   amuletSection: {
-    marginBottom: 20,
+    marginBottom: space.lg,
   },
   sectionTitle: {
-    color: "#e0e0ff",
-    fontSize: 16,
-    fontWeight: "600",
+    color: palette.text,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
     marginBottom: 4,
   },
   sectionHint: {
-    color: "#8888aa",
+    color: palette.textSoft,
     fontSize: 11,
-    marginBottom: 8,
+    marginBottom: space.sm,
   },
   amuletInput: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 10,
-    padding: 12,
-    color: "#ccc",
-    fontSize: 14,
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    padding: space.md,
+    color: palette.text,
+    fontSize: fontSize.body,
     minHeight: 60,
     textAlignVertical: "top",
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
   },
   actionsRow: {
     flexDirection: "row",
     gap: 12,
-    marginBottom: 20,
+    marginBottom: space.lg,
   },
   actionBtn: {
     flex: 1,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    padding: space.md,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
   },
   actionIcon: {
     fontSize: 28,
     marginBottom: 6,
   },
   actionLabel: {
-    color: "#ccc",
+    color: palette.textSoft,
     fontSize: 13,
   },
   startBtn: {
-    backgroundColor: "#4a7aef",
+    backgroundColor: palette.primary,
     paddingVertical: 16,
-    borderRadius: 12,
+    borderRadius: radius.md,
     alignItems: "center",
+    ...shadow.soft,
   },
   startBtnText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
+    color: palette.surface,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   // ===== Modal =====
   modalOverlay: {
     flex: 1,
-    backgroundColor: "#000000aa",
+    backgroundColor: "rgba(74, 64, 57, 0.45)",
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    padding: space.lg,
   },
   modalContent: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 16,
-    padding: 20,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.lg,
     width: "100%",
     maxWidth: 400,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadow.lift,
   },
   modalTitle: {
-    color: "#e0e0ff",
-    fontSize: 20,
-    fontWeight: "bold",
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    fontFamily,
     marginBottom: 4,
   },
   modalHint: {
-    color: "#8888aa",
+    color: palette.textSoft,
     fontSize: 12,
-    marginBottom: 16,
+    marginBottom: space.md,
   },
   emptyText: {
-    color: "#555",
-    fontSize: 14,
+    color: palette.textFaint,
+    fontSize: fontSize.body,
     textAlign: "center",
-    padding: 20,
+    padding: space.lg,
   },
   modalCloseBtn: {
-    backgroundColor: "#2a2a4a",
+    backgroundColor: palette.surfaceSoft,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: radius.sm,
     alignItems: "center",
-    marginTop: 12,
+    marginTop: space.md,
   },
   modalCloseBtnText: {
-    color: "#ccc",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
   },
   // ===== 法器卡片 =====
   artifactCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#0d0d1a",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
+    backgroundColor: palette.surface,
+    borderRadius: radius.sm,
+    padding: space.md,
+    marginBottom: space.sm,
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
   },
   artifactCardEquipped: {
-    borderColor: "#4a9eff",
-    backgroundColor: "#0d1a2e",
+    borderColor: palette.primary,
+    backgroundColor: palette.surfaceSoft,
   },
   artifactIcon: {
     fontSize: 28,
@@ -578,38 +578,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   artifactName: {
-    color: "#e0e0ff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
   },
   artifactDesc: {
-    color: "#8888aa",
+    color: palette.textSoft,
     fontSize: 11,
     marginTop: 2,
   },
   equippedBadge: {
-    color: "#4a9eff",
+    color: palette.primaryDark,
     fontSize: 11,
-    fontWeight: "600",
-  },
-  // ===== 植物卡片 =====
-  plantCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#0d0d1a",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#2a2a4a",
-  },
-  plantIcon: {
-    fontSize: 28,
-    marginRight: 12,
-  },
-  plantName: {
-    color: "#e0e0ff",
-    fontSize: 14,
-    fontWeight: "600",
+    fontWeight: fontWeight.semibold,
   },
 });

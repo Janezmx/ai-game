@@ -9,8 +9,8 @@ export const GestureHandlerRootView = ({ style, children, ...props }: any) => {
   // pointerEvents 应放在 style 中而非 props
   const { pointerEvents, ...rest } = props;
   const mergedStyle: any = Array.isArray(style)
-    ? { width: "100%", height: "100%", ...Object.assign({}, ...style) }
-    : { width: "100%", height: "100%", ...style };
+    ? { display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0, ...Object.assign({}, ...style) }
+    : { display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0, ...style };
   if (pointerEvents) {
     mergedStyle.pointerEvents = pointerEvents;
   }

@@ -13,9 +13,9 @@
 
 export type SSEEventType =
   // NPC 生成
-  | "npc_name" | "npc_attack" | "dialogue_chunk"
+  | "npc_name" | "npc_attack" | "dialogue_chunk" | "knowledge_point"
   // 对话
-  | "chunk" | "control_level" | "shield_damage" | "plant_status" | "assessment"
+  | "chunk" | "control_level" | "shield_damage" | "fog" | "assessment"
   // 通用
   | "done" | "error";
 
@@ -115,11 +115,12 @@ export function generateNPC(
   difficulty: number,
   onEvent: (event: SSEEvent) => void,
   signal?: AbortSignal,
-  level?: number
+  level?: number,
+  scenario?: string
 ): Promise<void> {
   return fetchSSE(
     "/api/npc/generate",
-    { playerContext, difficulty, level },
+    { playerContext, difficulty, level, scenario },
     onEvent,
     signal
   );
@@ -141,6 +142,7 @@ export function chatWithNPC(
     levelNpcRole: string;
     levelTactics: string;
     levelScenario: string;
+    openingLine?: string;
   }
 ): Promise<void> {
   return fetchSSE(

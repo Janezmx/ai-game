@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { useNavigate } from "react-router-dom";
 import { GestureHandlerRootView } from "../mocks/gesture-handler";
 import HeartDomainPrepareScreen from "../components/HeartDomainPrepareScreen";
@@ -8,6 +8,15 @@ import RepairScreen from "../components/RepairScreen";
 import ReviewScreen from "../components/ReviewScreen";
 import { useGameStore } from "../store/gameStore";
 import { GamePhase, LEVELS, GameRecord, Badge, ALL_BADGES } from "@aigame/shared";
+import {
+  palette,
+  radius,
+  space,
+  fontSize,
+  fontWeight,
+  fontFamily,
+  shadow,
+} from "../theme";
 
 export default function GamePage() {
   const navigate = useNavigate();
@@ -128,11 +137,17 @@ export default function GamePage() {
       {showReview ? (
         <ReviewScreen onComplete={handleReviewComplete} />
       ) : (
-        renderPhase()
+        <ScrollView
+          style={styles.pageScroll}
+          contentContainerStyle={styles.pageScrollContent}
+          showsVerticalScrollIndicator
+        >
+          {renderPhase()}
+        </ScrollView>
       )}
 
       {/* 首页按钮 */}
-      <TouchableOpacity style={styles.homeBtn} onPress={() => setShowHomeModal(true)}>
+      <TouchableOpacity style={styles.homeBtn} onPress={() => setShowHomeModal(true)} accessibilityLabel="返回首页" accessibilityRole="button">
         <Text style={styles.homeBtnText}>🏠</Text>
       </TouchableOpacity>
 
@@ -149,16 +164,20 @@ export default function GamePage() {
               <TouchableOpacity
                 style={styles.modalCancelBtn}
                 onPress={() => setShowHomeModal(false)}
+                accessibilityLabel="继续游戏"
+                accessibilityRole="button"
               >
                 <Text style={styles.modalCancelText}>继续游戏</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalConfirmBtn, { backgroundColor: "#ef5350" }]}
+                style={[styles.modalConfirmBtn, { backgroundColor: palette.clay }]}
                 onPress={() => {
                   setShowHomeModal(false);
                   resetForLevel(1);
                   navigate("/");
                 }}
+                accessibilityLabel="确认返回首页"
+                accessibilityRole="button"
               >
                 <Text style={styles.modalConfirmText}>返回首页</Text>
               </TouchableOpacity>
@@ -179,7 +198,7 @@ export default function GamePage() {
                 <Text style={styles.badgeModalDesc}>{badge.description}</Text>
               </View>
             ))}
-            <TouchableOpacity style={styles.badgeModalBtn} onPress={handleBadgeModalClose}>
+            <TouchableOpacity style={styles.badgeModalBtn} onPress={handleBadgeModalClose} accessibilityLabel="确认徽章" accessibilityRole="button">
               <Text style={styles.badgeModalBtnText}>太棒了！</Text>
             </TouchableOpacity>
           </View>
@@ -199,12 +218,16 @@ export default function GamePage() {
               <TouchableOpacity
                 style={styles.modalCancelBtn}
                 onPress={() => setShowNextLevelModal(false)}
+                accessibilityLabel="再等等"
+                accessibilityRole="button"
               >
                 <Text style={styles.modalCancelText}>再等等</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.modalConfirmBtn}
                 onPress={confirmNextLevel}
+                accessibilityLabel="进入下一关"
+                accessibilityRole="button"
               >
                 <Text style={styles.modalConfirmText}>进入下一关</Text>
               </TouchableOpacity>
@@ -231,10 +254,18 @@ export default function GamePage() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0a0a1a",
+    position: "relative",
+    backgroundColor: palette.bg,
     maxWidth: 500,
     width: "100%",
     alignSelf: "center",
+  },
+  pageScroll: {
+    flex: 1,
+    width: "100%",
+  },
+  pageScrollContent: {
+    minHeight: "100%",
   },
   homeBtn: {
     position: "absolute",
@@ -243,126 +274,138 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: palette.surface,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 90,
     borderWidth: 1,
-    borderColor: "#7c4dff44",
+    borderColor: palette.border,
+    ...shadow.soft,
   },
   homeBtnText: {
     fontSize: 18,
   },
   levelTransition: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#0a0a1aee",
+    backgroundColor: "rgba(74, 64, 57, 0.85)",
     justifyContent: "center",
     alignItems: "center",
     zIndex: 100,
   },
   transitionLabel: {
-    color: "#7c4dff",
-    fontSize: 14,
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
     letterSpacing: 2,
     marginBottom: 8,
+    fontFamily,
   },
   transitionTitle: {
-    color: "#b388ff",
-    fontSize: 24,
-    fontWeight: "bold",
+    color: palette.surface,
+    fontSize: fontSize.heading,
+    fontWeight: fontWeight.bold,
     textAlign: "center",
     marginBottom: 6,
+    fontFamily,
   },
   transitionSubtitle: {
-    color: "#9575cd",
-    fontSize: 14,
+    color: palette.surfaceSoft,
+    fontSize: fontSize.body,
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: space.lg,
+    fontFamily,
   },
   transitionHint: {
-    color: "#666",
-    fontSize: 12,
+    color: palette.surfaceSoft,
+    fontSize: fontSize.caption,
     fontStyle: "italic",
+    fontFamily,
   },
   // 确认弹框
   modalOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#000000aa",
+    backgroundColor: "rgba(74, 64, 57, 0.45)",
     justifyContent: "center",
     alignItems: "center",
     zIndex: 200,
   },
   modalCard: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 16,
-    padding: 24,
-    marginHorizontal: 40,
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.lg,
+    marginHorizontal: space.xl,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#7c4dff44",
+    borderColor: palette.border,
+    ...shadow.lift,
   },
   modalIcon: {
     fontSize: 40,
-    marginBottom: 12,
+    marginBottom: space.sm,
   },
   modalTitle: {
-    color: "#b388ff",
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 8,
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.xs,
+    fontFamily,
   },
   modalDesc: {
-    color: "#aaa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
     textAlign: "center",
     lineHeight: 20,
-    marginBottom: 20,
+    marginBottom: space.lg,
+    fontFamily,
   },
   modalButtons: {
     flexDirection: "row",
     gap: 12,
   },
   modalCancelBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    backgroundColor: "#2a2a4a",
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.sm,
+    backgroundColor: palette.surfaceSoft,
   },
   modalCancelText: {
-    color: "#888",
-    fontSize: 14,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    fontFamily,
   },
   modalConfirmBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    backgroundColor: "#7c4dff",
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.sm,
+    backgroundColor: palette.primary,
   },
   modalConfirmText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
   badgeModalCard: {
-    backgroundColor: "#1a1a2e",
-    borderRadius: 20,
-    padding: 24,
-    marginHorizontal: 32,
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    padding: space.lg,
+    marginHorizontal: space.lg,
     alignItems: "center",
     borderWidth: 2,
-    borderColor: "#ffd70066",
+    borderColor: "rgba(224, 176, 132, 0.5)",
+    ...shadow.lift,
   },
-  badgeModalContent: { alignItems: "center", marginBottom: 8 },
-  badgeModalIcon: { fontSize: 64, marginBottom: 8 },
-  badgeModalTitle: { color: "#ffd700", fontSize: 20, fontWeight: "bold", marginBottom: 8 },
-  badgeModalName: { color: "#fff", fontSize: 18, fontWeight: "600", marginBottom: 4 },
-  badgeModalDesc: { color: "#aaa", fontSize: 13, textAlign: "center" },
+  badgeModalContent: { alignItems: "center", marginBottom: space.xs },
+  badgeModalIcon: { fontSize: 64, marginBottom: space.xs },
+  badgeModalTitle: { color: palette.peach, fontSize: fontSize.title, fontWeight: fontWeight.bold, marginBottom: space.xs, fontFamily },
+  badgeModalName: { color: palette.text, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, marginBottom: 4, fontFamily },
+  badgeModalDesc: { color: palette.textSoft, fontSize: fontSize.body, textAlign: "center", fontFamily },
   badgeModalBtn: {
-    marginTop: 16,
-    backgroundColor: "#ffd700",
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 10,
+    marginTop: space.md,
+    backgroundColor: palette.peach,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.xl,
+    borderRadius: radius.pill,
+    ...shadow.soft,
   },
-  badgeModalBtnText: { color: "#1a1a2e", fontSize: 16, fontWeight: "bold" },
+  badgeModalBtnText: { color: palette.text, fontSize: fontSize.sub, fontWeight: fontWeight.bold, fontFamily },
 });

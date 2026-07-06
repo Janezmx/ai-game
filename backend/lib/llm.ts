@@ -102,20 +102,31 @@ export async function createChatCompletion(
 ): Promise<string> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
-  const response = await fetch(`${mergedConfig.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${mergedConfig.apiKey}`,
-    },
-    body: JSON.stringify({
+  const buildBody = (withJsonMode: boolean) =>
+    JSON.stringify({
       model: mergedConfig.model,
       messages,
       stream: false,
       temperature: 0.8,
-      max_tokens: 2048,
-    }),
-  });
+      max_tokens: 4096,
+      ...(withJsonMode ? { response_format: { type: "json_object" } } : {}),
+    });
+
+  const post = async (withJsonMode: boolean) =>
+    fetch(`${mergedConfig.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${mergedConfig.apiKey}`,
+      },
+      body: buildBody(withJsonMode),
+    });
+
+  // 优先尝试 json_object 模式；若代理/模型不支持该参数，则去除后重试
+  let response = await post(true);
+  if (!response.ok && response.status === 400) {
+    response = await post(false);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();

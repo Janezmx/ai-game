@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -20,8 +20,18 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
 import { GamePhase } from "@aigame/shared";
+import { getLevelKnowledgePoint } from "./KnowledgeCard";
+import {
+  palette,
+  radius,
+  space,
+  fontSize,
+  fontWeight,
+  fontFamily,
+  shadow,
+} from "../theme";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const SVG_SIZE = Math.min(SCREEN_WIDTH - 40, 360);
 const CENTER = SVG_SIZE / 2;
 
@@ -36,22 +46,32 @@ function BreathingGuide({
   const [phase, setPhase] = useState<"inhale" | "exhale" | "hold">("inhale");
   const [progress, setProgress] = useState(0);
   const [isActive, setIsActive] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stepsRef = useRef(0);
+
+  // 组件卸载时清理 interval
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, []);
 
   const startBreathing = useCallback(() => {
     if (isActive) return;
     setIsActive(true);
     setPhase("inhale");
+    stepsRef.current = 0;
 
-    const cycleDuration = 8000; // 8秒一个完整呼吸周期
-    let steps = 0;
-
-    const interval = setInterval(() => {
-      steps++;
-      const newProgress = Math.min(100, (steps / 20) * 100);
+    intervalRef.current = setInterval(() => {
+      stepsRef.current++;
+      const newProgress = Math.min(100, (stepsRef.current / 20) * 100);
       setProgress(newProgress);
 
       // 4秒吸气 → 4秒呼气
-      const cyclePos = (steps % 20) / 20; // 0~1 per cycle
+      const cyclePos = (stepsRef.current % 20) / 20; // 0~1 per cycle
       if (cyclePos < 0.5) {
         setPhase("inhale");
         breathScale.value = withTiming(1 + cyclePos * 0.3, { duration: 200 });
@@ -63,14 +83,13 @@ function BreathingGuide({
       }
 
       if (newProgress >= 100) {
-        clearInterval(interval);
+        clearInterval(intervalRef.current!);
+        intervalRef.current = null;
         setIsActive(false);
         onComplete();
       }
     }, 400);
-
-    return () => clearInterval(interval);
-  }, [isActive]);
+  }, [isActive, onComplete, breathScale, breathOpacity]);
 
   const circleAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: breathScale.value }],
@@ -80,9 +99,9 @@ function BreathingGuide({
   return (
     <View style={styles.breathingContainer}>
       {!isActive ? (
-        <TouchableOpacity style={styles.startBreathBtn} onPress={startBreathing}>
+        <TouchableOpacity style={styles.startBreathBtn} onPress={startBreathing} activeOpacity={0.9} accessibilityLabel="开始呼吸引导" accessibilityRole="button">
           <Text style={styles.startBreathBtnText}>开始呼吸引导</Text>
-          <Text style={styles.startBreathSubtext}>通过节奏呼吸驱散心域迷雾</Text>
+          <Text style={styles.startBreathSubtext}>深呼吸激活副交感神经——科学研究表明，慢节奏呼吸能直接降低操控焦虑带来的生理反应。</Text>
         </TouchableOpacity>
       ) : (
         <>
@@ -108,7 +127,7 @@ function calcCoverage(
   sampleCount = 48,
   threshold = 12,
 ): number {
-  if (allPaths.length === 0) return 0;
+  if (allPaths.length === 0 || sampleCount <= 0) return 0;
   // 生成理想形状上的采样点
   const samples = getShapePoints(sides, sampleCount);
   // 展平所有绘制点
@@ -229,7 +248,7 @@ function BoundaryDrawer({
       <Text style={styles.shapeLabel}>
         {sides <= 0 ? "⊙ 圆形" : `⬠ ${SHAPE_NAMES[sides] || "多边形"}(${sides}边)`}
       </Text>
-      <Text style={styles.drawHint}>沿着心域轮廓描绘，重建边界护盾</Text>
+      <Text style={styles.drawHint}>边界就像心理防线——每一次描绘都是对自我的重新确认。描得越完整，越不容易被侵入。</Text>
 
       <GestureHandlerRootView>
         <PanGestureHandler
@@ -241,8 +260,8 @@ function BoundaryDrawer({
             <Svg width={SVG_SIZE} height={SVG_SIZE} viewBox={`0 0 ${SVG_SIZE} ${SVG_SIZE}`}>
               <Defs>
                 <LinearGradient id="idealGrad" x1="0" y1="0" x2="1" y2="1">
-                  <Stop offset="0%" stopColor="#4a9eff" stopOpacity={0.3} />
-                  <Stop offset="100%" stopColor="#7c7cff" stopOpacity={0.15} />
+                  <Stop offset="0%" stopColor={palette.blue} stopOpacity={0.3} />
+                  <Stop offset="100%" stopColor={palette.primary} stopOpacity={0.15} />
                 </LinearGradient>
               </Defs>
 
@@ -250,7 +269,7 @@ function BoundaryDrawer({
               <Path
                 d={idealPathD}
                 fill="none"
-                stroke="#4a9eff"
+                stroke={palette.blue}
                 strokeWidth={1}
                 strokeDasharray="4,4"
                 opacity={0.4}
@@ -265,7 +284,7 @@ function BoundaryDrawer({
                       i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`
                     )
                     .join(" ")}
-                  stroke="#7c7cff"
+                  stroke={palette.primaryDark}
                   strokeWidth={4}
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -282,7 +301,7 @@ function BoundaryDrawer({
                       i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`
                     )
                     .join(" ")}
-                  stroke="#b0b0ff"
+                  stroke={palette.primary}
                   strokeWidth={4}
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -326,7 +345,13 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
     setFogDensity,
     setPhase,
     setShieldHealth,
+    currentKnowledgePoint,
+    currentLevel,
+    masteredKnowledgePointIds,
   } = useGameStore();
+
+  const kp = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
+  const isMastered = masteredKnowledgePointIds.includes(kp.id);
 
   const [step, setStep] = useState<"draw" | "breathe">("draw");
   const [showComplete, setShowComplete] = useState(false);
@@ -402,7 +427,19 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
               迷雾驱散: {Math.round(60)}%{"\n"}
               护盾恢复至: {Math.round(sanctuary.shieldHealth)}%
             </Text>
-            <TouchableOpacity style={styles.completeBtn} onPress={handleComplete}>
+
+            {/* 教育回顾卡片 */}
+            <View style={styles.eduReviewCard}>
+              <Text style={styles.eduReviewIcon}>📚</Text>
+              <Text style={styles.eduReviewTitle}>本关学会的关键一课</Text>
+              <Text style={styles.eduReviewTactic}>{kp.tactic}</Text>
+              <Text style={styles.eduReviewDef}>{kp.definition}</Text>
+              <Text style={styles.eduReviewSignalLabel}>最重要的识别信号：</Text>
+              <Text style={styles.eduReviewSignal}>{kp.signals?.[0] || "保持对自我感受的觉察"}</Text>
+              {isMastered && <Text style={styles.eduMastered}>✓ 已掌握</Text>}
+            </View>
+
+            <TouchableOpacity style={styles.completeBtn} onPress={handleComplete} activeOpacity={0.9} accessibilityLabel="返回心域" accessibilityRole="button">
               <Text style={styles.completeBtnText}>返回心域</Text>
             </TouchableOpacity>
           </Animated.View>
@@ -415,64 +452,71 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0d1a",
+    height: "auto",
+    backgroundColor: palette.bg,
     maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
   header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
     alignItems: "center",
+    backgroundColor: palette.surfaceSoft,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
   },
   title: {
-    color: "#e0e0ff",
-    fontSize: 24,
-    fontWeight: "bold",
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   subtitle: {
-    color: "#8888aa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     marginTop: 4,
+    fontFamily,
   },
   stepIndicator: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginVertical: 12,
+    marginVertical: space.sm,
     paddingHorizontal: 40,
   },
   stepDot: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "#2a2a4a",
+    backgroundColor: palette.surfaceSoft,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
-    borderColor: "#3a3a6a",
+    borderColor: palette.borderStrong,
   },
   stepDotActive: {
-    backgroundColor: "#4a7aef",
-    borderColor: "#7c9cff",
+    backgroundColor: palette.primary,
+    borderColor: palette.primaryDark,
   },
   stepNumber: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "bold",
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.bold,
+    fontFamily,
   },
   stepLine: {
     flex: 1,
     height: 2,
-    backgroundColor: "#2a2a4a",
+    backgroundColor: palette.border,
     marginHorizontal: 4,
   },
   stepLineActive: {
-    backgroundColor: "#4a7aef",
+    backgroundColor: palette.primary,
   },
   content: {
     flex: 1,
-    padding: 16,
+    padding: space.md,
   },
   // ===== 绘制边界 =====
   drawContainer: {
@@ -480,29 +524,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   drawTitle: {
-    color: "#e0e0ff",
-    fontSize: 18,
-    fontWeight: "600",
+    color: palette.text,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
     marginBottom: 4,
+    fontFamily,
   },
   shapeLabel: {
-    color: "#7c4dff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.primaryDark,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
     marginBottom: 4,
+    fontFamily,
   },
   drawHint: {
-    color: "#8888aa",
-    fontSize: 12,
-    marginBottom: 12,
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    marginBottom: space.md,
+    fontFamily,
   },
   drawArea: {
     width: SVG_SIZE,
     height: SVG_SIZE,
-    borderRadius: 16,
-    backgroundColor: "#1a1a2e",
+    borderRadius: radius.md,
+    backgroundColor: palette.surfaceSoft,
     borderWidth: 1,
-    borderColor: "#2a2a4a",
+    borderColor: palette.border,
     overflow: "hidden",
   },
   drawFooter: {
@@ -510,27 +557,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     width: "100%",
-    marginTop: 12,
-    paddingHorizontal: 8,
+    marginTop: space.md,
+    paddingHorizontal: space.xs,
   },
   drawProgress: {
-    color: "#8888aa",
-    fontSize: 13,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    fontFamily,
   },
   completeDrawBtn: {
-    backgroundColor: "#4a7aef",
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    backgroundColor: palette.primary,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.sm,
   },
   completeDrawBtnDisabled: {
-    backgroundColor: "#2a3a5a",
+    backgroundColor: palette.surfaceSoft,
     opacity: 0.6,
   },
   completeDrawBtnText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
   // ===== 呼吸引导 =====
   breathingContainer: {
@@ -539,52 +588,57 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   startBreathBtn: {
-    backgroundColor: "#2a4a6a",
+    backgroundColor: palette.blue,
     paddingVertical: 20,
     paddingHorizontal: 40,
-    borderRadius: 16,
+    borderRadius: radius.lg,
     alignItems: "center",
+    ...shadow.soft,
   },
   startBreathBtnText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
   },
   startBreathSubtext: {
-    color: "#888",
-    fontSize: 12,
+    color: palette.bg,
+    fontSize: fontSize.caption,
     marginTop: 6,
+    fontFamily,
   },
   breathCircle: {
     width: 160,
     height: 160,
     borderRadius: 80,
-    backgroundColor: "#4a9eff",
+    backgroundColor: palette.blue,
     opacity: 0.6,
-    marginBottom: 24,
+    marginBottom: space.lg,
   },
   breathPhaseText: {
-    color: "#e0e0ff",
-    fontSize: 20,
-    fontWeight: "600",
-    marginBottom: 16,
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.semibold,
+    marginBottom: space.md,
+    fontFamily,
   },
   breathProgressBar: {
     width: 200,
     height: 6,
-    backgroundColor: "#2a2a4a",
-    borderRadius: 3,
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.pill,
     overflow: "hidden",
-    marginBottom: 8,
+    marginBottom: space.xs,
   },
   breathProgressFill: {
     height: "100%",
-    backgroundColor: "#4a9eff",
-    borderRadius: 3,
+    backgroundColor: palette.blue,
+    borderRadius: radius.pill,
   },
   breathProgressText: {
-    color: "#888",
-    fontSize: 14,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    fontFamily,
   },
   // ===== 完成 =====
   completeContainer: {
@@ -594,30 +648,88 @@ const styles = StyleSheet.create({
   },
   completeIcon: {
     fontSize: 64,
-    marginBottom: 16,
+    marginBottom: space.md,
   },
   completeTitle: {
-    color: "#e0e0ff",
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 12,
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.sm,
+    fontFamily,
   },
   completeText: {
-    color: "#aaaacc",
-    fontSize: 14,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
     textAlign: "center",
     lineHeight: 24,
-    marginBottom: 24,
+    marginBottom: space.lg,
+    fontFamily,
   },
   completeBtn: {
-    backgroundColor: "#4a7aef",
-    paddingVertical: 14,
-    paddingHorizontal: 48,
-    borderRadius: 12,
+    backgroundColor: palette.primary,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.xl,
+    borderRadius: radius.pill,
+    ...shadow.soft,
   },
   completeBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+    color: palette.surface,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+  },
+  eduReviewCard: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginBottom: space.lg,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderLeftWidth: 4,
+    borderLeftColor: palette.green,
+    width: "100%",
+  },
+  eduReviewIcon: { fontSize: 28, marginBottom: space.xs },
+  eduReviewTitle: {
+    color: palette.green,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    fontFamily,
+    marginBottom: space.xs,
+  },
+  eduReviewTactic: {
+    color: palette.primaryDark,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: 4,
+  },
+  eduReviewDef: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 20,
+    fontFamily,
+    marginBottom: space.sm,
+  },
+  eduReviewSignalLabel: {
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    fontFamily,
+    marginBottom: 2,
+  },
+  eduReviewSignal: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    fontStyle: "italic",
+  },
+  eduMastered: {
+    color: palette.green,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.bold,
+    fontFamily,
+    marginTop: space.sm,
+    textAlign: "center",
   },
 });
