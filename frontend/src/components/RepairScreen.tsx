@@ -260,8 +260,8 @@ function BoundaryDrawer({
             <Svg width={SVG_SIZE} height={SVG_SIZE} viewBox={`0 0 ${SVG_SIZE} ${SVG_SIZE}`}>
               <Defs>
                 <LinearGradient id="idealGrad" x1="0" y1="0" x2="1" y2="1">
-                  <Stop offset="0%" stopColor={palette.blue} stopOpacity={0.3} />
-                  <Stop offset="100%" stopColor={palette.primary} stopOpacity={0.15} />
+                  <Stop offset="0%" stopColor={palette.blue} stopOpacity={0.5} />
+                  <Stop offset="100%" stopColor={palette.primary} stopOpacity={0.35} />
                 </LinearGradient>
               </Defs>
 
@@ -270,9 +270,9 @@ function BoundaryDrawer({
                 d={idealPathD}
                 fill="none"
                 stroke={palette.blue}
-                strokeWidth={1}
+                strokeWidth={2}
                 strokeDasharray="4,4"
-                opacity={0.4}
+                opacity={0.7}
               />
 
               {/* 已完成的路径 */}
@@ -285,11 +285,11 @@ function BoundaryDrawer({
                     )
                     .join(" ")}
                   stroke={palette.primaryDark}
-                  strokeWidth={4}
+                  strokeWidth={5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   fill="none"
-                  opacity={0.8}
+                  opacity={0.95}
                 />
               ))}
 
@@ -302,11 +302,11 @@ function BoundaryDrawer({
                     )
                     .join(" ")}
                   stroke={palette.primary}
-                  strokeWidth={4}
+                  strokeWidth={5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   fill="none"
-                  opacity={0.6}
+                  opacity={0.85}
                 />
               )}
             </Svg>
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 80,
     backgroundColor: palette.blue,
-    opacity: 0.6,
+    opacity: 0.85,
     marginBottom: space.lg,
   },
   breathPhaseText: {

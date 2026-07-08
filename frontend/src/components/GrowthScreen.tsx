@@ -6,10 +6,12 @@ import {
   StyleSheet,
   ScrollView,
   Dimensions,
+  Modal,
 } from "react-native";
 import Svg, { Circle, Line, Polyline, Polygon, Text as SvgText } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
+import { KnowledgePoint } from "@aigame/shared";
 import {
   palette,
   radius,
@@ -19,7 +21,7 @@ import {
   fontFamily,
   shadow,
 } from "../theme";
-import { LEVEL_KNOWLEDGE, TRAP_EMOJI_MAP } from "./KnowledgeCard";
+import KnowledgeCard, { LEVEL_KNOWLEDGE, TRAP_EMOJI_MAP } from "./KnowledgeCard";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CHART_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
@@ -123,10 +125,19 @@ function MiniLineChart({ data, color }: { data: number[]; color: string }) {
       <Line x1={pad} y1={pad + chartH} x2={pad + chartW} y2={pad + chartH} stroke={palette.border} strokeWidth={1} />
       {/* 折线 */}
       <Polyline points={points} fill="none" stroke={color} strokeWidth={2} />
-      {/* 数据点 */}
-      {data.map((v, i) => (
-        <Circle key={i} cx={pad + i * stepX} cy={pad + chartH - ((v - min) / range) * chartH} r={3} fill={color} />
-      ))}
+      {/* 数据点 + 数值标签 */}
+      {data.map((v, i) => {
+        const cx = pad + i * stepX;
+        const cy = pad + chartH - ((v - min) / range) * chartH;
+        return (
+          <React.Fragment key={i}>
+            <Circle cx={cx} cy={cy} r={3} fill={color} />
+            <SvgText x={cx} y={cy - 8} fill={color} fontSize={9} textAnchor="middle" fontWeight="bold">
+              {Math.round(v)}
+            </SvgText>
+          </React.Fragment>
+        );
+      })}
     </Svg>
   );
 }
@@ -143,6 +154,7 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
   const unlockedBadges = badges.filter((b) => b.unlockedAt);
 
   const allKnowledge = Object.values(LEVEL_KNOWLEDGE);
+  const [selectedKp, setSelectedKp] = useState<KnowledgePoint | null>(null);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -201,7 +213,14 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
               {allKnowledge.map((kp) => {
                 const mastered = masteredKnowledgePointIds.includes(kp.id);
                 return (
-                  <View key={kp.id} style={[styles.kpItem, !mastered && styles.kpItemLocked]}>
+                  <TouchableOpacity
+                    key={kp.id}
+                    style={[styles.kpItem, !mastered && styles.kpItemLocked]}
+                    onPress={() => setSelectedKp(kp)}
+                    activeOpacity={0.7}
+                    accessibilityLabel={`查看${kp.tactic}详情`}
+                    accessibilityRole="button"
+                  >
                     <Text style={styles.kpEmoji}>{TRAP_EMOJI_MAP[kp.id] || "📖"}</Text>
                     <View style={styles.kpTextWrap}>
                       <Text style={[styles.kpName, !mastered && styles.kpNameLocked]}>{kp.tactic}</Text>
@@ -210,7 +229,8 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
                     <Text style={[styles.kpMark, mastered ? styles.kpMastered : styles.kpUnmastered]}>
                       {mastered ? "✓" : "○"}
                     </Text>
-                  </View>
+                    <Text style={styles.kpArrow}>›</Text>
+                  </TouchableOpacity>
                 );
               })}
             </View>
@@ -276,6 +296,24 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
           </View>
         )}
       </ScrollView>
+
+      {/* 知识点详情弹框 */}
+      <Modal visible={!!selectedKp} transparent animationType="fade" onRequestClose={() => setSelectedKp(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <ScrollView style={styles.modalScroll}>
+              {selectedKp && <KnowledgeCard kp={selectedKp} />}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setSelectedKp(null)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.modalCloseBtnText}>关闭</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -415,4 +453,39 @@ const styles = StyleSheet.create({
   badgeName: { color: palette.text, fontSize: fontSize.caption, fontWeight: fontWeight.semibold, textAlign: "center", fontFamily },
   badgeNameLocked: { color: palette.textFaint },
   badgeDesc: { color: palette.textSoft, fontSize: 10, textAlign: "center", marginTop: 2, fontFamily },
+
+  kpArrow: { color: palette.textFaint, fontSize: fontSize.sub, marginLeft: space.xs },
+
+  // ===== 知识点详情弹框 =====
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(10,10,26,0.4)",
+    padding: space.md,
+  },
+  modalContent: {
+    backgroundColor: palette.bg,
+    borderRadius: radius.lg,
+    padding: space.md,
+    maxWidth: 500,
+    width: "100%",
+    maxHeight: "85%",
+  },
+  modalScroll: {
+    maxHeight: "100%",
+  },
+  modalCloseBtn: {
+    backgroundColor: palette.primary,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    marginTop: space.md,
+  },
+  modalCloseBtnText: {
+    color: palette.surface,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+  },
 });

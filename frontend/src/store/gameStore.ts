@@ -19,33 +19,43 @@ import {
   KnowledgePoint,
 } from "@aigame/shared";
 
-// ==================== 教育内容持久化（localStorage） ====================
-const EDU_STORAGE_KEY = "aigame-edu";
+// ==================== 持久化（localStorage） ====================
+const STORAGE_KEY = "aigame-save";
 
-interface PersistedEdu {
+interface PersistedData {
   masteredKnowledgePointIds: string[];
   hasSeenTutorial: boolean;
+  gameHistory: GameRecord[];
+  badges: Badge[];
 }
 
-function loadEdu(): PersistedEdu {
+function loadPersisted(): PersistedData {
   try {
-    const raw = localStorage.getItem(EDU_STORAGE_KEY);
-    if (!raw) return { masteredKnowledgePointIds: [], hasSeenTutorial: false };
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { masteredKnowledgePointIds: [], hasSeenTutorial: false, gameHistory: [], badges: [] };
     const p = JSON.parse(raw);
     return {
       masteredKnowledgePointIds: Array.isArray(p.masteredKnowledgePointIds) ? p.masteredKnowledgePointIds : [],
       hasSeenTutorial: !!p.hasSeenTutorial,
+      gameHistory: Array.isArray(p.gameHistory) ? p.gameHistory : [],
+      badges: Array.isArray(p.badges) ? p.badges : [],
     };
   } catch {
-    return { masteredKnowledgePointIds: [], hasSeenTutorial: false };
+    return { masteredKnowledgePointIds: [], hasSeenTutorial: false, gameHistory: [], badges: [] };
   }
 }
 
-function saveEdu(mastered: string[], hasSeenTutorial: boolean) {
+function persist(get: () => GameStore) {
   try {
+    const s = get();
     localStorage.setItem(
-      EDU_STORAGE_KEY,
-      JSON.stringify({ masteredKnowledgePointIds: mastered, hasSeenTutorial })
+      STORAGE_KEY,
+      JSON.stringify({
+        masteredKnowledgePointIds: s.masteredKnowledgePointIds,
+        hasSeenTutorial: s.hasSeenTutorial,
+        gameHistory: s.gameHistory,
+        badges: s.badges,
+      })
     );
   } catch {
     // localStorage 不可用时静默跳过
@@ -68,7 +78,8 @@ function createInitialArtifacts(): Artifact[] {
     { id: "a1", name: "心盾", type: ArtifactType.Shield, description: "提升抵抗值", remainingCooldown: 0, maxCooldown: 3, power: 60 },
     { id: "a2", name: "真言镜", type: ArtifactType.Mirror, description: "降低NPC控制力", remainingCooldown: 0, maxCooldown: 4, power: 55 },
     { id: "a3", name: "破谎矛", type: ArtifactType.Spear, description: "强力降低NPC控制力", remainingCooldown: 0, maxCooldown: 5, power: 75 },
-    { id: "a4", name: "雾散灯", type: ArtifactType.Shield, description: "驱散迷雾", remainingCooldown: 0, maxCooldown: 3, power: 40 },
+    // 雾散灯（已隐藏，迷雾功能下架，状态逻辑保留）
+    // { id: "a4", name: "雾散灯", type: ArtifactType.Shield, description: "驱散迷雾", remainingCooldown: 0, maxCooldown: 3, power: 40 },
   ];
 }
 
@@ -149,6 +160,7 @@ export interface GameStore {
   // 关卡管理
   currentLevel: number;      // 1-5
   totalLevels: number;        // 5
+  setCurrentLevel: (level: number) => void;  // 从外部设置起始关卡
   nextLevel: () => number;    // 推进到下一关，返回新的关卡数
   resetLevel: () => void;     // 重置所有状态回第一关
   resetForLevel: (level: number) => void;  // 重置到指定关卡（保留心域）
@@ -164,6 +176,7 @@ export interface GameStore {
   // 法器操作
   useArtifact: (artifactId: string) => void;
   equipArtifact: (artifactId: string) => void;
+  unequipArtifact: (artifactId: string) => void;
   tickCooldowns: () => void;
 
   // 对话操作
@@ -210,8 +223,6 @@ export interface GameStore {
   markKnowledgeMastered: (id: string) => void;
   setHasSeenTutorial: (v: boolean) => void;
   setScenarioPremise: (text: string) => void;
-  amuletText: string;
-  setAmuletText: (text: string) => void;
   addWhyNote: (note: string) => void;
 }
 
@@ -224,16 +235,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   conversation: createInitialConversation(),
   repair: createInitialRepair(),
   review: createInitialReview(),
-  gameHistory: [],
-  badges: createInitialBadges(),
+  gameHistory: loadPersisted().gameHistory,
+  badges: loadPersisted().badges.length > 0 ? loadPersisted().badges : createInitialBadges(),
   currentRoundIndex: 0,
   npcAttack: "",
   isGameOver: false,
 
   // 教育内容初始状态（已掌握知识点 / 教程标记从 localStorage 恢复）
   currentKnowledgePoint: null,
-  masteredKnowledgePointIds: loadEdu().masteredKnowledgePointIds,
-  hasSeenTutorial: loadEdu().hasSeenTutorial,
+  masteredKnowledgePointIds: loadPersisted().masteredKnowledgePointIds,
+  hasSeenTutorial: loadPersisted().hasSeenTutorial,
   scenarioPremise: "",
   amuletText: "",
   collectedWhyNotes: [],
@@ -278,6 +289,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ...freshLevelEducation(),
     }),
 
+  setCurrentLevel: (level: number) =>
+    set({
+      currentLevel: level,
+      conversation: createInitialConversation(level),
+      sanctuary: createInitialSanctuary(level),
+      repair: createInitialRepair(),
+      review: createInitialReview(),
+      currentRoundIndex: 0,
+      phase: GamePhase.SanctuaryPrep,
+      ...freshLevelEducation(),
+    }),
+
   // === 阶段管理 ===
   setPhase: (phase) => set({ phase }),
 
@@ -312,6 +335,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
           ...s.sanctuary,
           equippedArtifacts: [...s.sanctuary.equippedArtifacts, artifact],
           artifacts: s.sanctuary.artifacts.filter((a) => a.id !== artifactId),
+        },
+      };
+    }),
+
+  unequipArtifact: (artifactId) =>
+    set((s) => {
+      const artifact = s.sanctuary.equippedArtifacts.find((a) => a.id === artifactId);
+      if (!artifact) return s;
+      artifact.remainingCooldown = 0;
+      return {
+        sanctuary: {
+          ...s.sanctuary,
+          equippedArtifacts: s.sanctuary.equippedArtifacts.filter((a) => a.id !== artifactId),
+          artifacts: [...s.sanctuary.artifacts, artifact],
         },
       };
     }),
@@ -440,36 +477,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
     })),
 
   // === 成长系统 ===
-  addGameRecord: (record) =>
-    set((s) => ({ gameHistory: [...s.gameHistory, record] })),
+  addGameRecord: (record) => {
+    set((s) => ({ gameHistory: [...s.gameHistory, record] }));
+    persist(get);
+  },
 
-  unlockBadge: (badgeId) =>
+  unlockBadge: (badgeId) => {
     set((s) => ({
       badges: s.badges.map((b) =>
         b.id === badgeId && !b.unlockedAt ? { ...b, unlockedAt: Date.now() } : b
       ),
-    })),
+    }));
+    persist(get);
+  },
 
   // === 教育内容 ===
   setKnowledgePoint: (kp) => set({ currentKnowledgePoint: kp }),
 
-  markKnowledgeMastered: (id) =>
+  markKnowledgeMastered: (id) => {
     set((s) => {
       if (s.masteredKnowledgePointIds.includes(id)) return s;
       const next = [...s.masteredKnowledgePointIds, id];
-      saveEdu(next, s.hasSeenTutorial);
       return { masteredKnowledgePointIds: next };
-    }),
+    });
+    persist(get);
+  },
 
-  setHasSeenTutorial: (v) =>
-    set((s) => {
-      saveEdu(s.masteredKnowledgePointIds, v);
-      return { hasSeenTutorial: v };
-    }),
+  setHasSeenTutorial: (v) => {
+    set({ hasSeenTutorial: v });
+    persist(get);
+  },
 
   setScenarioPremise: (text) => set({ scenarioPremise: text }),
-
-  setAmuletText: (text) => set({ amuletText: text }),
 
   addWhyNote: (note) =>
     set((s) => {

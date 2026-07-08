@@ -87,8 +87,9 @@ function HeartDomainSVG({
         />
       )}
 
-      {/* 迷雾覆盖 */}
+      {/* 迷雾覆盖（已隐藏，效果不明显，状态逻辑保留）
       <Circle cx={50} cy={50} r={48} fill="url(#fogGrad)" />
+      */}
     </Svg>
   );
 }
@@ -108,7 +109,7 @@ function ArtifactCard({
   const getIcon = (type: ArtifactType) => {
     switch (type) {
       case ArtifactType.Shield: return "🛡️";
-      case ArtifactType.Mirror: return "🪞";
+      case ArtifactType.Mirror: return "🔍";
       case ArtifactType.Spear: return "🔱";
       default: return "🧰";
     }
@@ -131,18 +132,13 @@ function ArtifactCard({
 
 // ==================== 进入对话前的概念介绍 ====================
 const CONCEPTS: { id: string; icon: string; title: string; desc: string }[] = [
-  {
-    id: "amulet",
-    icon: "🪬",
-    title: "护身符文字",
-    desc: "写下一句能稳住你的话。对话中被绕晕时，它就是你的锚点，提醒你「我的边界不容侵犯」。",
-  },
-  {
-    id: "fog",
-    icon: "🌫️",
-    title: "迷雾密度",
-    desc: "代表操控话术带来的困惑。迷雾越浓，越难看清对方套路、护盾也越脆弱；用呼吸引导或法器可驱散它。",
-  },
+  // 迷雾密度介绍（已隐藏，效果不明显，状态逻辑保留）
+  // {
+  //   id: "fog",
+  //   icon: "🌫️",
+  //   title: "迷雾密度",
+  //   desc: "代表操控话术带来的困惑。迷雾越浓，越难看清对方套路、护盾也越脆弱；有效应对和法器可驱散它。",
+  // },
   {
     id: "artifact",
     icon: "🛡️",
@@ -167,16 +163,14 @@ export default function HeartDomainPrepareScreen({
     setShieldHealth,
     setFogDensity,
     equipArtifact,
-    useArtifact,
+    unequipArtifact,
     currentKnowledgePoint,
     currentLevel,
-    setAmuletText: storeSetAmuletText,
   } = useGameStore();
 
   // 本关知识点：优先用 NPC 生成（含真实案例），否则用静态兜底
   const knowledgePoint = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
 
-  const [amuletText, setAmuletText] = useState("");
   const [showArtifactModal, setShowArtifactModal] = useState(false);
   const [activeArtifactType, setActiveArtifactType] = useState<ArtifactType | null>(null);
 
@@ -190,21 +184,16 @@ export default function HeartDomainPrepareScreen({
 
   const handleUnequip = useCallback(
     (artifactId: string) => {
-      // 简单地从 equipped 移除
-      const artifact = sanctuary.equippedArtifacts.find((a) => a.id === artifactId);
-      if (artifact) {
-        useArtifact(artifactId); // 仅作标记
-      }
+      unequipArtifact(artifactId);
     },
-    [sanctuary.equippedArtifacts, useArtifact]
+    [unequipArtifact]
   );
 
   // 进入下一阶段
   const handleStartBattle = useCallback(() => {
-    storeSetAmuletText(amuletText);
     setPhase(GamePhase.DialogueBattle);
     onComplete?.();
-  }, [setPhase, onComplete, storeSetAmuletText, amuletText]);
+  }, [setPhase, onComplete]);
 
   return (
     <GestureHandlerRootView style={[styles.container, { paddingTop: insets.top }]}>
@@ -223,7 +212,7 @@ export default function HeartDomainPrepareScreen({
           <KnowledgeCard kp={knowledgePoint} />
         </View>
 
-        {/* 概念介绍：进入对话前认识三个核心元素 */}
+        {/* 概念介绍：进入对话前认识三个核心元素（已隐藏）
         <View style={styles.conceptIntro}>
           <Text style={styles.conceptIntroLabel}>💡 进入对话前，先认识三个伙伴</Text>
           {CONCEPTS.map((c) => (
@@ -236,6 +225,7 @@ export default function HeartDomainPrepareScreen({
             </View>
           ))}
         </View>
+        */}
 
 
 
@@ -254,31 +244,16 @@ export default function HeartDomainPrepareScreen({
             <Text style={styles.statValue}>{sanctuary.shieldHealth}</Text>
             <Text style={styles.statLabel}>护盾强度</Text>
           </View>
+          {/* 迷雾密度统计（已隐藏，效果不明显，状态逻辑保留）
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.fogDensity}</Text>
             <Text style={styles.statLabel}>迷雾密度</Text>
           </View>
+          */}
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.equippedArtifacts.length}</Text>
             <Text style={styles.statLabel}>法器装备</Text>
           </View>
-        </View>
-
-        {/* 护身符书写 */}
-        <View style={styles.amuletSection}>
-          <Text style={styles.sectionTitle}>✍️ 护身符文字</Text>
-          <Text style={styles.sectionHint}>
-            写下一句能提醒你坚守边界的话语
-          </Text>
-          <TextInput
-            style={styles.amuletInput}
-            value={amuletText}
-            onChangeText={setAmuletText}
-            placeholder="例如：我的边界不容侵犯…"
-            placeholderTextColor={palette.textFaint}
-            multiline
-            maxLength={100}
-          />
         </View>
 
         {/* 快速操作 */}
@@ -573,6 +548,8 @@ const styles = StyleSheet.create({
   artifactIcon: {
     fontSize: 28,
     marginRight: 12,
+    width: 32,
+    textAlign: "center",
   },
   artifactInfo: {
     flex: 1,

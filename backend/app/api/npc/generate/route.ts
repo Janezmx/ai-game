@@ -155,6 +155,15 @@ ${seed.style}
 }
 
 /**
+ * 测试用 GET - 验证模块加载
+ */
+export async function GET() {
+  return new Response(JSON.stringify({ ok: true, msg: "NPC generate module loaded" }), {
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/**
  * NPC 生成 API - SSE 流式返回 NPC 信息
  * POST /api/npc/generate
  */

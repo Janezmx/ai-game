@@ -232,24 +232,38 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         let fullContent = "";
-        let assessmentStr = "";
 
         try {
-          const response = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
+          // ----- 流式请求 LLM（保持原有可用性），同时强制 JSON 输出保证每轮科普可解析 -----
+          const buildBody = (withJsonMode: boolean) =>
+            JSON.stringify({
               model,
               messages,
               stream: true,
               temperature: 0.8,
-              max_tokens: 2048,
-            }),
-            signal: AbortSignal.timeout(30000), // 30秒超时
-          });
+              max_tokens: 4096,
+              ...(withJsonMode ? { response_format: { type: "json_object" } } : {}),
+            });
+
+          const post = (withJsonMode: boolean) =>
+            fetch(`${baseUrl}/chat/completions`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: buildBody(withJsonMode),
+              signal: AbortSignal.timeout(60000),
+            });
+
+          // 优先 json_object 模式；若代理不支持则去掉后重试
+          let usedJsonMode = true;
+          let response = await post(true);
+          if (!response.ok && response.status === 400) {
+            usedJsonMode = false;
+            response = await post(false);
+          }
+          console.log("[DEBUG] LLM response mode:", usedJsonMode ? "json_object" : "plain", "status:", response.status);
 
           if (!response.ok) {
             const errText = await response.text();
@@ -290,6 +304,9 @@ export async function POST(request: NextRequest) {
                 const parsed = JSON.parse(data);
                 const delta = parsed.choices?.[0]?.delta?.content;
                 if (delta) {
+                  if (fullContent.length === 0 && delta.trim() === "") {
+                    console.log("[DEBUG] first delta is whitespace only, data line:", data.slice(0, 120));
+                  }
                   fullContent += delta;
                 }
               } catch {
@@ -297,33 +314,30 @@ export async function POST(request: NextRequest) {
               }
             }
           }
+          // -------------------------------------------------------------------
 
-          // 6. 解析评估 JSON（LLM 输出的是评估 JSON，其中包含 nextDialogue）
-          let assessment = null;
-          // 先去掉可能的 markdown 代码块标记
+          // 解析评估 JSON（json_object 模式确保输出合法 JSON；保留多层鲁棒提取以防万一）
+          let assessment: any = null;
           let cleanContent = fullContent
             .replace(/```(?:json|JSON)\s*/g, "")
             .replace(/```/g, "")
             .trim();
-
-          // 从后往前找所有 {…} 块，取最后一个能解析为 JSON 的
-          const allJsonBlocks = findAllJsonBlocks(cleanContent);
-          for (const block of allJsonBlocks.reverse()) {
-            let jsonStr = block;
-            for (let attempt = 0; attempt < 3; attempt++) {
+          const firstBrace = cleanContent.indexOf("{");
+          const lastBrace = cleanContent.lastIndexOf("}");
+          if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            cleanContent = cleanContent.slice(firstBrace, lastBrace + 1);
+          }
+          try {
+            assessment = JSON.parse(cleanContent);
+          } catch {
+            // 兜底：从后往前解析所有 {…} 块
+            const allJsonBlocks = findAllJsonBlocks(fullContent);
+            for (const block of allJsonBlocks.reverse()) {
               try {
-                assessment = JSON.parse(jsonStr);
+                assessment = JSON.parse(block);
                 break;
-              } catch {
-                const inner = jsonStr.match(/^\{\s*(\{[\s\S]*\})\s*\}$/);
-                if (inner) {
-                  jsonStr = inner[1];
-                } else {
-                  break;
-                }
-              }
+              } catch {}
             }
-            if (assessment) break;
           }
 
           // 提取上一轮成功生成的知识点，用于解析失败时兜底
@@ -407,7 +421,13 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          dialogueText = dialogueText || assessment.nextStrategy || "（NPC沉默不语）";
+          dialogueText = (dialogueText || "").trim();
+          if (!dialogueText) {
+            console.log("[DEBUG] dialogueText empty, fullContent length:", fullContent.length, "content:", JSON.stringify(fullContent.slice(0, 200)));
+            // 解析失败时直接显示 AI 原始返回，不做默认文案替换
+            dialogueText = fullContent;
+          }
+          console.log("[DEBUG] final dialogueText length:", dialogueText.length, "preview:", JSON.stringify(dialogueText.slice(0, 80)));
           for (let i = 0; i < dialogueText.length; i += 3) {
             const chunk = dialogueText.slice(i, i + 3);
             controller.enqueue(encoder.encode(sseEncode("chunk", chunk)));

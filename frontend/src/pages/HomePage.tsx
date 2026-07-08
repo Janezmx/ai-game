@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
@@ -12,12 +12,78 @@ export default function HomePage() {
   const setHasSeenTutorial = useGameStore((s) => s.setHasSeenTutorial);
   const masteredKnowledgePointIds = useGameStore((s) => s.masteredKnowledgePointIds);
   const gameHistory = useGameStore((s) => s.gameHistory);
+  const setCurrentLevel = useGameStore((s) => s.setCurrentLevel);
+
+  const [showLevelPicker, setShowLevelPicker] = useState(false);
 
   const masteredCount = masteredKnowledgePointIds.length;
   const totalCount = 5;
   const clearedLevels = new Set(gameHistory.filter(r => r.victory).map(r => r.level));
+  const maxCleared = clearedLevels.size > 0 ? Math.max(...clearedLevels) : 0;
+  const maxUnlockedLevel = Math.min(5, maxCleared + 1);
+
+  const handleStart = useCallback(() => {
+    if (maxUnlockedLevel > 1) {
+      setShowLevelPicker(true);
+    } else {
+      setCurrentLevel(1);
+      navigate("/game");
+    }
+  }, [maxUnlockedLevel, navigate, setCurrentLevel]);
+
+  const handleSelectLevel = useCallback((level: number) => {
+    setCurrentLevel(level);
+    setShowLevelPicker(false);
+    navigate("/game");
+  }, [navigate, setCurrentLevel]);
 
   return (
+    <>
+    {showLevelPicker && (
+      <View style={styles.modalOverlay}>
+        <View style={styles.pickerCard}>
+          <Text style={styles.pickerTitle}>选择关卡</Text>
+          <Text style={styles.pickerSub}>
+            已通关前 {maxCleared} 关，可选 1 ～ {maxUnlockedLevel} 关
+          </Text>
+          <View style={styles.pickerList}>
+            {Array.from({ length: maxUnlockedLevel }, (_, i) => i + 1).map((lv) => {
+              const isCleared = clearedLevels.has(lv);
+              const info = LEVELS.find((l) => l.id === lv);
+              return (
+                <TouchableOpacity
+                  key={lv}
+                  style={[styles.pickerItem, isCleared && styles.pickerItemCleared]}
+                  onPress={() => handleSelectLevel(lv)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.pickerBadge, isCleared && styles.pickerBadgeCleared]}>
+                    <Text style={styles.pickerBadgeText}>{isCleared ? "✓" : lv}</Text>
+                  </View>
+                  <View style={styles.pickerInfo}>
+                    <Text style={styles.pickerLevelName}>
+                      第{lv}关：{info?.title || ""}
+                    </Text>
+                    <Text style={styles.pickerLevelSub}>{info?.subtitle || ""}</Text>
+                  </View>
+                  {isCleared && <Text style={styles.pickerStatus}>已通关</Text>}
+                  {!isCleared && lv === maxUnlockedLevel && (
+                    <Text style={styles.pickerStatusNew}>新关卡</Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <TouchableOpacity
+            style={styles.pickerClose}
+            onPress={() => setShowLevelPicker(false)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.pickerCloseText}>取消</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    )}
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.hero}>
@@ -61,7 +127,7 @@ export default function HomePage() {
 
         <TouchableOpacity
           style={styles.startButton}
-          onPress={() => navigate("/game")}
+          onPress={handleStart}
           activeOpacity={0.85}
         >
           <Text style={styles.startButtonText}>开始修行</Text>
@@ -81,6 +147,7 @@ export default function HomePage() {
         onFinish={() => setHasSeenTutorial(true)}
       />
     </View>
+    </>
   );
 }
 
@@ -248,5 +315,104 @@ const styles = StyleSheet.create({
     color: palette.primaryDark,
     fontSize: fontSize.sub,
     fontWeight: fontWeight.medium,
+  },
+  // 关卡选择弹窗
+  modalOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    zIndex: 999,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: space.lg,
+  },
+  pickerCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.lg,
+    padding: space.lg,
+    width: "100%",
+    maxWidth: 380,
+    ...shadow.lift,
+  },
+  pickerTitle: {
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    fontFamily,
+    textAlign: "center",
+    marginBottom: space.xs,
+  },
+  pickerSub: {
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    fontFamily,
+    textAlign: "center",
+    marginBottom: space.lg,
+  },
+  pickerList: {
+    marginBottom: space.md,
+  },
+  pickerItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginBottom: space.sm,
+  },
+  pickerItemCleared: {
+    opacity: 0.7,
+  },
+  pickerBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: palette.sage,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: space.md,
+  },
+  pickerBadgeCleared: {
+    backgroundColor: palette.green,
+  },
+  pickerBadgeText: {
+    color: palette.surface,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.bold,
+  },
+  pickerInfo: {
+    flex: 1,
+  },
+  pickerLevelName: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+  },
+  pickerLevelSub: {
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
+    marginTop: 2,
+  },
+  pickerStatus: {
+    color: palette.green,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.medium,
+  },
+  pickerStatusNew: {
+    color: palette.primary,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.bold,
+  },
+  pickerClose: {
+    marginTop: space.sm,
+    paddingVertical: space.sm,
+    alignItems: "center",
+  },
+  pickerCloseText: {
+    color: palette.textFaint,
+    fontSize: fontSize.body,
   },
 });

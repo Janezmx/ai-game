@@ -162,7 +162,7 @@ export default function HeartDomainMini({
           strokeDasharray="3,3"
         />
 
-        {sanctuary.fogDensity > 0 && (
+        {false && sanctuary.fogDensity > 0 && (
           <G opacity={0.15 + (sanctuary.fogDensity / 100) * 0.6}>
             <Ellipse cx={CENTER * 0.7} cy={CENTER * 0.8} rx={20} ry={8} fill={palette.fog} opacity={0.35} />
             <Ellipse cx={CENTER * 1.3} cy={CENTER * 1.1} rx={18} ry={6} fill={palette.fog} opacity={0.28} />

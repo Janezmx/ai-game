@@ -42,10 +42,12 @@ const CHAT_MAX_HEIGHT = SCREEN_HEIGHT * 0.45; // 聊天区最大高度为屏幕�
 // 打字机效果 Hook（仅对流式消息逐字输出，非流式直接返回全文）
 function useTypewriter(text: string, speed = 30) {
   const [displayed, setDisplayed] = useState("");
+  const indexRef = useRef(0);
 
   useEffect(() => {
     if (!text) {
       setDisplayed("");
+      indexRef.current = 0;
       return;
     }
     // 非流式消息：直接返回全文，跳过 setInterval
@@ -53,11 +55,15 @@ function useTypewriter(text: string, speed = 30) {
       setDisplayed(text);
       return;
     }
-    let i = 0;
+    // 如果 text 变长（新增 chunk），不重置指针，继续从当前位置打字
+    if (indexRef.current >= text.length) {
+      setDisplayed(text);
+      return;
+    }
     const timer = setInterval(() => {
-      i++;
-      setDisplayed(text.slice(0, i));
-      if (i >= text.length) clearInterval(timer);
+      indexRef.current++;
+      setDisplayed(text.slice(0, indexRef.current));
+      if (indexRef.current >= text.length) clearInterval(timer);
     }, speed);
     return () => clearInterval(timer);
   }, [text, speed]);
@@ -87,7 +93,7 @@ function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming
     <View style={[styles.bubbleRow, isPlayer ? styles.playerRow : styles.npcRow]}>
       {!isPlayer && (
         <View style={styles.npcAvatar}>
-          <Text style={styles.npcAvatarText}>{"🫥"}</Text>
+          <Text style={styles.npcAvatarText}>{"🎭"}</Text>
         </View>
       )}
       <View style={[styles.bubble, isPlayer ? styles.playerBubble : styles.npcBubble]}>
@@ -134,7 +140,7 @@ function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming
 function getArtifactIcon(type: ArtifactType) {
   switch (type) {
     case ArtifactType.Shield: return "🛡️";
-    case ArtifactType.Mirror: return "🪞";
+    case ArtifactType.Mirror: return "🔍";
     case ArtifactType.Spear: return "🔱";
     default: return "🧰";
   }
@@ -270,6 +276,13 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const [showVictoryModal, setShowVictoryModal] = useState(false);
   const [showGameOverModal, setShowGameOverModal] = useState(false);
   const [sseError, setSseError] = useState<string | null>(null);
+  const [artifactFeedback, setArtifactFeedback] = useState<{
+    name: string;
+    icon: string;
+    effect: string;
+    effectValue: number;
+    cooldown: number;
+  } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
@@ -545,19 +558,28 @@ NPC控制等级：${conversation.npcControlLevel}，
       const trap = lastTrapType.current;
       const hasBonus = (keywords: string[]) => keywords.some((k) => trap.includes(k));
       let bonus = 1;
+      let effectLabel = "";
+      let effectValue = 0;
+      const artifactIcon = getArtifactIcon(artifact.type);
 
       switch (artifact.type) {
-        case ArtifactType.Shield: // 心盾：克制煤气灯/感受否定
+        case ArtifactType.Shield: // 心盾：提升抵抗值
           bonus = hasBonus(["煤气灯", "感受否定", "情感绑架"]) ? 2 : 1;
-          store.setPlayerResistance(conversation.playerResistance + 15 * bonus);
+          effectValue = 15 * bonus;
+          store.setPlayerResistance(conversation.playerResistance + effectValue);
+          effectLabel = `抵抗值 +${effectValue}`;
           break;
-        case ArtifactType.Mirror: // 真言镜：克制模糊逻辑/记忆否认
+        case ArtifactType.Mirror: // 真言镜：降低 NPC 控制力
           bonus = hasBonus(["模糊逻辑", "记忆否认", "事实扭曲"]) ? 2 : 1;
-          store.setNpcControlLevel(conversation.npcControlLevel - 10 * bonus);
+          effectValue = 10 * bonus;
+          store.setNpcControlLevel(conversation.npcControlLevel - effectValue);
+          effectLabel = `NPC控制力 -${effectValue}`;
           break;
-        case ArtifactType.Spear: // 破谎矛：克制所有类型
+        case ArtifactType.Spear: // 破谎矛：强力降低 NPC 控制力
           bonus = trap ? 1.5 : 1;
-          store.setNpcControlLevel(conversation.npcControlLevel - 20 * bonus);
+          effectValue = Math.round(20 * bonus);
+          store.setNpcControlLevel(conversation.npcControlLevel - effectValue);
+          effectLabel = `NPC控制力 -${effectValue}`;
           break;
       }
 
@@ -567,8 +589,8 @@ NPC控制等级：${conversation.npcControlLevel}，
           ? `🛡️ 心盾双倍克制——你觉察到对方正在${trap.includes("煤气灯") ? "否认你的感受" : trap.includes("情感绑架") ? "用情感绑架你" : "操控你"}，护盾帮你稳住自我判断。`
           : `🛡️ 心盾激活——边界护盾增强，帮你保持冷静面对操控。`,
         Mirror: bonus > 1
-          ? `🪞 真言镜双倍反射——对方在${trap.includes("模糊逻辑") ? "用模糊逻辑迷惑你" : "扭曲事实"}，镜子帮你照出真相。`
-          : `🪞 真言镜照出真相——让对方的逻辑漏洞暴露无遗。`,
+          ? `🔍 真言镜双倍反射——对方在${trap.includes("模糊逻辑") ? "用模糊逻辑迷惑你" : "扭曲事实"}，镜子帮你照出真相。`
+          : `🔍 真言镜照出真相——让对方的逻辑漏洞暴露无遗。`,
         Spear: bonus > 1
           ? `🔱 破谎矛精准命中——对方的${trap || "操控"}在真相面前不堪一击。`
           : `🔱 破谎矛出击——直接瓦解对方的攻击。`,
@@ -580,8 +602,17 @@ NPC控制等级：${conversation.npcControlLevel}，
         timestamp: Date.now(),
       });
 
+      // 显示法器反馈弹框
+      setArtifactFeedback({
+        name: artifact.name,
+        icon: artifactIcon,
+        effect: effectLabel,
+        effectValue,
+        cooldown: artifact.maxCooldown,
+      });
+      setTimeout(() => setArtifactFeedback(null), 2500);
+
       // 法器使用后驱散迷雾（与后端效果一致，提供即时反馈）：
-      // 盾类（含雾散灯）直接驱散；镜/矛降低操控从而间接驱散
       const fogReduce =
         artifact.type === ArtifactType.Shield
           ? artifact.power
@@ -707,6 +738,11 @@ NPC控制等级：${conversation.npcControlLevel}，
         <Text style={styles.turnText}>回合 {conversation.turnCount}</Text>
       </View>
 
+      {/* 胜负条件提示 */}
+      <Text style={styles.victoryHint}>
+        🎯 NPC操控归零即胜 | 满10回合操控&lt;50即胜 | 抵抗归零则败
+      </Text>
+
       {/* 护身符横幅 */}
       {store.amuletText ? (
         <View style={styles.amuletBar}>
@@ -729,7 +765,7 @@ NPC控制等级：${conversation.npcControlLevel}，
       {/* NPC名称 */}
       {conversation.npcName && (
         <View style={styles.npcTitleBar}>
-          <Text style={styles.npcTitleIcon}>🫥</Text>
+          <Text style={styles.npcTitleIcon}>🎭</Text>
           <Text style={styles.npcTitleText}>{conversation.npcName}</Text>
           {isNPCGenerating && (
             <Text style={styles.npcLoading}>召唤中...</Text>
@@ -742,7 +778,7 @@ NPC控制等级：${conversation.npcControlLevel}，
         <View style={styles.errorBanner}>
           <Text style={styles.errorBannerText}>⚠️ {sseError}</Text>
           <TouchableOpacity
-            onPress={() => { setSseError(null); startBattle(); }}
+            onPress={() => { setSseError(null); setIsBattleStart(true); startBattle(); }}
             style={styles.errorRetryBtn}
             activeOpacity={0.7}
             accessibilityLabel="重试连接"
@@ -771,10 +807,11 @@ NPC控制等级：${conversation.npcControlLevel}，
         ref={scrollRef}
         style={styles.messageList}
         contentContainerStyle={styles.messageListContent}
+        showsVerticalScrollIndicator={true}
       >
         {conversation.messages.length === 0 && isNPCGenerating && (
           <View style={styles.loadingContainer}>
-            <Text style={styles.loadingText}>🫥 操控型NPC正在生成...</Text>
+            <Text style={styles.loadingText}>🎭 操控型NPC正在生成...</Text>
           </View>
         )}
 
@@ -860,9 +897,7 @@ NPC控制等级：${conversation.npcControlLevel}，
         </View>
       </View>
 
-      {/* 迷雾效果：越危险雾越浓（温暖柔雾）
-          透明度由后端驱动的 sanctuary.fogDensity 决定（被操控变浓 / 有效应对驱散）。
-          背景色为不透明，opacity 即唯一可见度因子，避免与背景 alpha 相乘导致几乎不可见 */}
+      {/* 迷雾效果已隐藏：效果不明显，先不渲染（状态逻辑保留，后续可恢复）
       <View
         style={[
           styles.fogOverlay,
@@ -879,6 +914,7 @@ NPC控制等级：${conversation.npcControlLevel}，
           },
         ]}
       />
+      */}
 
       {/* 临界状态覆盖 */}
       {conversation.isCritical && (
@@ -936,6 +972,20 @@ NPC控制等级：${conversation.npcControlLevel}，
             >
               <Text style={styles.modalConfirmText}>进入修复</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* 法器使用反馈弹框 */}
+      {artifactFeedback && (
+        <View style={styles.artifactFeedbackOverlay} pointerEvents="none">
+          <View style={styles.artifactFeedbackCard}>
+            <Text style={styles.artifactFeedbackIcon}>{artifactFeedback.icon}</Text>
+            <Text style={styles.artifactFeedbackName}>{artifactFeedback.name}</Text>
+            <Text style={styles.artifactFeedbackEffect}>📊 {artifactFeedback.effect}</Text>
+            <Text style={styles.artifactFeedbackCooldown}>
+              ⏳ 冷却 {artifactFeedback.cooldown} 回合
+            </Text>
           </View>
         </View>
       )}
@@ -1017,6 +1067,14 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: fontSize.caption,
     marginLeft: space.xs,
+    fontFamily,
+  },
+  victoryHint: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    textAlign: "center",
+    paddingVertical: 4,
+    paddingHorizontal: space.md,
     fontFamily,
   },
   introBanner: {
@@ -1160,6 +1218,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     maxHeight: CHAT_MAX_HEIGHT,
+    overflowY: "auto",
   },
   messageListContent: {
     padding: space.md,
@@ -1360,6 +1419,8 @@ const styles = StyleSheet.create({
   },
   artifactIcon: {
     fontSize: fontSize.title,
+    width: fontSize.title,
+    textAlign: "center",
   },
   artifactName: {
     color: palette.textSoft,
@@ -1507,6 +1568,52 @@ const styles = StyleSheet.create({
     color: palette.surface,
     fontSize: fontSize.sub,
     fontWeight: fontWeight.semibold,
+    fontFamily,
+  },
+
+  // ===== 法器反馈弹框 =====
+  artifactFeedbackOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 100,
+  },
+  artifactFeedbackCard: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.primary,
+    paddingVertical: space.lg,
+    paddingHorizontal: space.xl,
+    alignItems: "center",
+    minWidth: 200,
+    ...shadow.lift,
+  },
+  artifactFeedbackIcon: {
+    fontSize: 40,
+    marginBottom: space.xs,
+  },
+  artifactFeedbackName: {
+    color: palette.text,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    fontFamily,
+    marginBottom: space.sm,
+  },
+  artifactFeedbackEffect: {
+    color: palette.green,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    fontFamily,
+    marginBottom: 4,
+  },
+  artifactFeedbackCooldown: {
+    color: palette.textSoft,
+    fontSize: fontSize.caption,
     fontFamily,
   },
 });
