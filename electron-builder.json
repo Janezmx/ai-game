@@ -11,6 +11,9 @@
     "shared/**/*",
     "package.json"
   ],
+  "asarUnpack": [
+    "backend/**/*"
+  ],
   "extraMetadata": {
     "main": "electron/main.js"
   },

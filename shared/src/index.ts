@@ -10,6 +10,7 @@ export enum ArtifactType {
   Shield = "Shield",
   Mirror = "Mirror",
   Spear = "Spear",
+  Insight = "Insight",
 }
 
 export interface Artifact {

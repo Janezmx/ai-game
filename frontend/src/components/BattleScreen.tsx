@@ -12,7 +12,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useGameStore } from "../store/gameStore";
-import { chatWithNPC, generateNPC, SSEEvent } from "../api/sse";
+import { chatWithNPC, generateNPC, fetchInsight, SSEEvent } from "../api/sse";
+import { playSend, playReceive, playArtifact, playVictory, playDamage } from "../utils/sound";
 import {
   DialogueMessage,
   ArtifactType,
@@ -23,7 +24,6 @@ import {
   NPCResponseAssessment,
   KnowledgePoint,
 } from "@aigame/shared";
-import HeartDomainMini from "./HeartDomainMini";
 import ProgressBar from "./ProgressBar";
 import {
   palette,
@@ -76,12 +76,23 @@ function makeMsgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+// Loading 动画（三点跳动）
+function LoadingDots() {
+  const [dots, setDots] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setDots((d) => (d + 1) % 4), 400);
+    return () => clearInterval(t);
+  }, []);
+  return <Text style={styles.loadingDots}>{".".repeat(dots) || "\u00A0"}</Text>;
+}
+
 // 消息气泡
 function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming: boolean }) {
   const isPlayer = msg.role === "player";
   const typedContent = useTypewriter(msg.content, isPlayer ? 1 : 25);
   const [showWhy, setShowWhy] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
+  const isLoading = isStreaming && !msg.content;
 
   useEffect(() => {
     if (msg.whyNote) {
@@ -97,10 +108,13 @@ function MessageBubble({ msg, isStreaming }: { msg: DialogueMessage; isStreaming
         </View>
       )}
       <View style={[styles.bubble, isPlayer ? styles.playerBubble : styles.npcBubble]}>
-        <Text style={[styles.bubbleText, isPlayer ? styles.playerText : styles.npcText]}>
-          {isStreaming ? typedContent : msg.content}
-          {isStreaming && <Text style={styles.cursor}>|</Text>}
-        </Text>
+        {isLoading ? (
+          <LoadingDots />
+        ) : (
+          <Text style={[styles.bubbleText, isPlayer ? styles.playerText : styles.npcText]}>
+            {isStreaming ? typedContent : msg.content}
+          </Text>
+        )}
 
         {/* 每轮「为什么」科普点评：默认收起，降低认知负担 */}
         {!isPlayer && msg.whyNote && (
@@ -142,6 +156,7 @@ function getArtifactIcon(type: ArtifactType) {
     case ArtifactType.Shield: return "🛡️";
     case ArtifactType.Mirror: return "🔍";
     case ArtifactType.Spear: return "🔱";
+    case ArtifactType.Insight: return "🔔";
     default: return "🧰";
   }
 }
@@ -268,7 +283,6 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const [isWaiting, setIsWaiting] = useState(false);
   const [isNPCGenerating, setIsNPCGenerating] = useState(false);
   const [lastUsedArtifact, setLastUsedArtifact] = useState<Artifact | null>(null);
-  const [activeArtifactType, setActiveArtifactType] = useState<ArtifactType | null>(null);
   const [stormMode, setStormMode] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isBattleStart, setIsBattleStart] = useState(true);
@@ -276,6 +290,7 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const [showVictoryModal, setShowVictoryModal] = useState(false);
   const [showGameOverModal, setShowGameOverModal] = useState(false);
   const [sseError, setSseError] = useState<string | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
   const [artifactFeedback, setArtifactFeedback] = useState<{
     name: string;
     icon: string;
@@ -291,8 +306,20 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const latestValues = useRef({ npcControlLevel: conversation.npcControlLevel, playerResistance: conversation.playerResistance, turnCount: 0 });
   const lastTrapType = useRef("");
   const lastAlternatives = useRef<{ text: string; rationale: string }[]>([]);
+  // 首轮建议：LLM 根据开场白生成的回复建议（与明辨铃生成的区分开）
+  const openingAlternativesRef = useRef<{ text: string; rationale: string }[]>([]);
   // 保存 NPC 开场白，传给 chat 路由以建立连贯情境
   const openingLineRef = useRef("");
+  // 明辨铃：记录激活时的回合数，用 useEffect 监听回合变化自动复位
+  const insightActiveRef = useRef(false);
+  const insightUsedTurnRef = useRef(-1);
+
+  // 回合变化时自动关闭建议（下一轮）
+  useEffect(() => {
+    if (insightActiveRef.current && conversation.turnCount > insightUsedTurnRef.current) {
+      insightActiveRef.current = false;
+    }
+  }, [conversation.turnCount]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -338,6 +365,10 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
                   timestamp: Date.now(),
                 });
               }
+              // 首轮建议：LLM根据开场白生成的回复建议
+              if (event.data.openingAlternatives?.length) {
+                openingAlternativesRef.current = event.data.openingAlternatives;
+              }
             }
             break;
           case "knowledge_point":
@@ -351,20 +382,21 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
           case "done":
             setIsNPCGenerating(false);
             store.setPlayerTurn(true);
+            playReceive();
             setShowIntro(false);
             break;
           case "error":
             console.error("NPC生成错误:", event.data);
-            setSseError("NPC 生成失败，请重试");
+            setSseError(String(event.data));
             setIsNPCGenerating(false);
             store.setPlayerTurn(true);
             setShowIntro(false);
             break;
         }
       }, abortRef.current.signal, level, currentScenario);
-    } catch (err) {
+    } catch (err: any) {
       console.error("生成NPC失败:", err);
-      setSseError("网络异常，请检查连接后重试");
+      setSseError(String(err.message || err));
       setIsNPCGenerating(false);
       store.setPlayerTurn(true);
       setShowIntro(false);
@@ -380,6 +412,7 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
     setIsSending(true);
     setIsWaiting(true);
     store.setPlayerTurn(false);
+    playSend();
 
     // 添加玩家消息
     addMessageWithId({ role: "player", content: text, timestamp: Date.now() });
@@ -426,6 +459,7 @@ NPC控制等级：${conversation.npcControlLevel}，
               const actualDamage = Math.max(0, event.data - reduction);
               store.setPlayerResistance(actualDamage);
               latestValues.current.playerResistance = actualDamage;
+              if (actualDamage > 10) playDamage();
               if (actualDamage < 30) {
                 setStormMode(true);
               }
@@ -439,6 +473,7 @@ NPC控制等级：${conversation.npcControlLevel}，
               const a = event.data as NPCResponseAssessment;
               lastTrapType.current = a.trapType || "";
               lastAlternatives.current = a.alternatives || [];
+              console.log("[battle] assessment recv, alternatives:", a.alternatives?.length || 0, "turn:", conversation.turnCount);
               const msgs = conversation.messages;
               const npcMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
               const playerMsg = msgs.length > 1 ? msgs[msgs.length - 2] : undefined;
@@ -501,6 +536,7 @@ NPC控制等级：${conversation.npcControlLevel}，
               break;
             case "error":
               console.error("对话错误:", event.data);
+              setSseError(String(event.data));
               setIsWaiting(false);
               setIsSending(false);
               store.setPlayerTurn(true);
@@ -524,7 +560,7 @@ NPC控制等级：${conversation.npcControlLevel}，
     } catch (err: any) {
       if (err.name !== "AbortError") {
         console.error("对话请求失败:", err);
-        setSseError("连接中断，请点击重试按钮继续对话");
+        setSseError(String(err.message || err));
       }
       setIsWaiting(false);
       setIsSending(false);
@@ -550,12 +586,11 @@ NPC控制等级：${conversation.npcControlLevel}，
       if (artifact.remainingCooldown > 0 || isWaiting) return;
 
       store.useArtifact(artifact.id);
-      setActiveArtifactType(artifact.type);
       setLastUsedArtifact(artifact);
-      setTimeout(() => setActiveArtifactType(null), 1500);
+      playArtifact();
 
       // 法器策略系统：特定法器对特定操控手法有克制加成
-      const trap = lastTrapType.current;
+      const trap = lastTrapType.current || "";
       const hasBonus = (keywords: string[]) => keywords.some((k) => trap.includes(k));
       let bonus = 1;
       let effectLabel = "";
@@ -581,6 +616,32 @@ NPC控制等级：${conversation.npcControlLevel}，
           store.setNpcControlLevel(conversation.npcControlLevel - effectValue);
           effectLabel = `NPC控制力 -${effectValue}`;
           break;
+        case ArtifactType.Insight: // 明辨铃：调用洞察 API 实时生成建议
+          effectLabel = "正在分析...";
+          insightActiveRef.current = true;
+          insightUsedTurnRef.current = conversation.turnCount;
+          setInsightLoading(true);
+          lastAlternatives.current = []; // 清空旧建议，等 API 返回
+
+          // 构建当前对话上下文发送给洞察 API
+          const ctxMessages = conversation.messages.map((m) => ({
+            role: (m.role === "player" ? "user" : "assistant") as "user" | "assistant" | "system",
+            content: m.content,
+          }));
+
+          fetchInsight(ctxMessages, (event: SSEEvent) => {
+            if (event.type === "alternatives" && Array.isArray(event.data)) {
+              lastAlternatives.current = event.data;
+              setInsightLoading(false);
+              // 强制触发 React 重渲染以显示建议
+              store.setPlayerTurn(conversation.isPlayerTurn);
+            } else if (event.type === "error") {
+              setInsightLoading(false);
+            }
+          }).catch(() => {
+            setInsightLoading(false);
+          });
+          break;
       }
 
       // 法器语义反馈文本
@@ -594,6 +655,7 @@ NPC控制等级：${conversation.npcControlLevel}，
         Spear: bonus > 1
           ? `🔱 破谎矛精准命中——对方的${trap || "操控"}在真相面前不堪一击。`
           : `🔱 破谎矛出击——直接瓦解对方的攻击。`,
+        Insight: `🔔 明辨铃响起——你可以听到智慧的回应方式。`,
       };
 
       addMessageWithId({
@@ -666,6 +728,10 @@ NPC控制等级：${conversation.npcControlLevel}，
   // 已装备的法器
   const equippedArtifacts = sanctuary.equippedArtifacts;
 
+  // 胜利/失败 音效
+  useEffect(() => { if (showVictoryModal) playVictory(); }, [showVictoryModal]);
+  useEffect(() => { if (showGameOverModal) playDamage(); }, [showGameOverModal]);
+
   // NPC 回复时自动滚动到底部
   useEffect(() => {
     if (scrollRef.current) {
@@ -673,12 +739,10 @@ NPC控制等级：${conversation.npcControlLevel}，
     }
   }, [conversation.messages.length, isWaiting]);
 
-  // 推荐回复：后端生成后用后端；第一轮（玩家尚未发言、无 alternatives）按本关知识点动态生成开口示范兜底
+  // 推荐回复：仅当明辨铃在当前回合激活时显示
   const suggestionList: { text: string; rationale: string }[] =
-    lastAlternatives.current.length > 0
+    insightActiveRef.current && lastAlternatives.current.length > 0
       ? lastAlternatives.current
-      : conversation.turnCount <= 1
-      ? buildOpeningSuggestions(knowledgePoint)
       : [];
   const showSuggestions =
     suggestionList.length > 0 && conversation.isPlayerTurn && !isWaiting && !isNPCGenerating;
@@ -711,12 +775,12 @@ NPC控制等级：${conversation.npcControlLevel}，
       )}
 
       <View style={[styles.header]}>
-        {/* 心域缩略图 */}
-        <HeartDomainMini
-          size={44}
-          activeArtifactType={activeArtifactType}
-          stormMode={stormMode}
-        />
+        {/* 心域状态 */}
+        <View style={styles.shieldIcon}>
+          <Text style={styles.shieldEmoji}>
+            {conversation.playerResistance > 60 ? "💚" : conversation.playerResistance > 30 ? "💛" : "❤️"}
+          </Text>
+        </View>
 
         {/* 状态栏 */}
         <View style={styles.statusContainer}>
@@ -845,10 +909,18 @@ NPC控制等级：${conversation.npcControlLevel}，
         </View>
       )}
 
-      {/* 建议回复选项：后端有则用之，第一轮尚未生成时给开口示范 */}
+      {/* 明辨铃加载中 */}
+      {insightLoading && (
+        <View style={styles.insightLoadingBar}>
+          <LoadingDots />
+          <Text style={styles.insightLoadingText}>正在分析最佳回应...</Text>
+        </View>
+      )}
+
+      {/* 建议回复选项 */}
       {showSuggestions && (
         <View style={styles.suggestionsBar}>
-          {suggestionList.slice(0, 3).map((alt, i) => (
+          {suggestionList.filter((alt) => alt?.text).slice(0, 3).map((alt, i) => (
             <TouchableOpacity
               key={i}
               style={styles.suggestionChip}
@@ -879,6 +951,9 @@ NPC控制等级：${conversation.npcControlLevel}，
           editable={!isWaiting && !isNPCGenerating && conversation.isPlayerTurn}
           multiline
           maxLength={500}
+          returnKeyType="send"
+          blurOnSubmit={false}
+          onSubmitEditing={(e) => { handleSend(); }}
         />
         <View style={styles.inputButtons}>
           <TouchableOpacity
@@ -1057,6 +1132,17 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
     borderBottomWidth: 1,
     borderBottomColor: palette.border,
+  },
+  shieldIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: palette.bg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  shieldEmoji: {
+    fontSize: 20,
   },
   statusContainer: {
     flex: 1,
@@ -1296,9 +1382,11 @@ const styles = StyleSheet.create({
   npcText: {
     color: palette.text,
   },
-  cursor: {
-    color: palette.primaryDark,
+  loadingDots: {
+    color: palette.textSoft,
+    fontSize: fontSize.title,
     fontWeight: fontWeight.bold,
+    letterSpacing: 2,
   },
   whyNote: {
     marginTop: space.sm,
@@ -1352,6 +1440,22 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: fontSize.body,
     lineHeight: 20,
+    fontFamily,
+  },
+  insightLoadingBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: palette.surface,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+  },
+  insightLoadingText: {
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    marginLeft: space.xs,
     fontFamily,
   },
   suggestionsBar: {

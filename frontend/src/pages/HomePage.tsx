@@ -130,15 +130,15 @@ export default function HomePage() {
           onPress={handleStart}
           activeOpacity={0.85}
         >
-          <Text style={styles.startButtonText}>开始修行</Text>
+          <Text style={styles.startButtonText}>⚔️ 开始修行</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.growthButton}
+          style={styles.startButton}
           onPress={() => navigate("/growth")}
           activeOpacity={0.85}
         >
-          <Text style={styles.growthButtonText}>🌱 成长记录</Text>
+          <Text style={styles.startButtonText}>📊 成长记录</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -291,30 +291,20 @@ const styles = StyleSheet.create({
   startButton: {
     backgroundColor: palette.primary,
     paddingHorizontal: 56,
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderRadius: radius.pill,
-    marginTop: space.lg,
+    marginTop: space.md,
+    width: 240,
+    alignSelf: "center",
+    alignItems: "center",
     ...shadow.soft,
   },
   startButtonText: {
     color: palette.surface,
-    fontSize: fontSize.title,
-    fontWeight: fontWeight.bold,
-    letterSpacing: 2,
-    fontFamily,
-  },
-  growthButton: {
-    marginTop: space.md,
-    paddingHorizontal: 40,
-    paddingVertical: 12,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.primaryDark,
-  },
-  growthButtonText: {
-    color: palette.primaryDark,
     fontSize: fontSize.sub,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 1,
+    fontFamily,
   },
   // 关卡选择弹窗
   modalOverlay: {

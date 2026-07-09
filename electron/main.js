@@ -1,11 +1,11 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const { startFrontend, startBackend } = require("./server");
 
 const isDev = !app.isPackaged;
-const BACKEND_PORT = 3001;
-const FRONTEND_PORT = 3000;
+const BACKEND_PORT = 3009; // 保留但不再使用
+const FRONTEND_PORT = 3008;
 
 let mainWindow = null;
 let backendProcess = null;
@@ -49,9 +49,14 @@ function openWindow(url) {
 
   mainWindow.loadURL(url);
 
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-  }
+  // 生产模式也自动打开控制台（调试用）
+  mainWindow.webContents.openDevTools({ mode: "bottom" });
+
+  mainWindow.webContents.on("before-input-event", (_, input) => {
+    if (input.key === "F12" || input.key === "f12") {
+      mainWindow.webContents.toggleDevTools();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -100,15 +105,16 @@ app.whenReady().then(async () => {
     }, 15000);
   } else {
     // 生产模式：启动内置服务器
-    backendProcess = startBackend();
-    frontendServer = startFrontend();
-
-    // 等待后端就绪后打开窗口
     try {
-      await waitForServer(`http://localhost:${BACKEND_PORT}/api/chat`);
+      backendProcess = startBackend();
+      frontendServer = startFrontend();
+
+      // 等待服务器就绪后打开窗口（API 内嵌在前端服务器中，端口 3008）
+      await waitForServer(`http://localhost:${FRONTEND_PORT}/api/chat`);
       openWindow(`http://localhost:${FRONTEND_PORT}`);
     } catch (e) {
       console.error("Failed to start servers:", e);
+      dialog.showErrorBox("启动失败", `服务器启动失败：\n${e.message}\n\n请检查是否已安装了 Node.js（https://nodejs.org）`);
       app.quit();
     }
   }

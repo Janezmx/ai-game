@@ -89,8 +89,7 @@ export default function HeartDomainMini({
         return (
           <Animated.View style={[StyleSheet.absoluteFill, effectAnimStyle]}>
             <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-              <Circle cx={CENTER} cy={CENTER} r={r} fill="none" stroke={palette.primary} strokeWidth={3} opacity={0.6} />
-              <Circle cx={CENTER} cy={CENTER} r={r * 0.7} fill="none" stroke={palette.primaryDark} strokeWidth={2} opacity={0.4} />
+              <Circle cx={CENTER} cy={CENTER} r={r} fill="none" stroke={palette.primary} strokeWidth={2} opacity={0.5} />
             </Svg>
           </Animated.View>
         );
@@ -142,7 +141,7 @@ export default function HeartDomainMini({
           </RadialGradient>
         </Defs>
 
-        <Circle cx={CENTER} cy={CENTER} r={CENTER - 2} fill="url(#bgGrad)" stroke={palette.border} strokeWidth={1} />
+        <Circle cx={CENTER} cy={CENTER} r={CENTER - 2} fill="url(#bgGrad)" />
 
         <Circle
           cx={CENTER}
@@ -150,16 +149,6 @@ export default function HeartDomainMini({
           r={CENTER * 0.85}
           fill="url(#shieldGrad)"
           opacity={0.3 + (sanctuary.shieldHealth / 100) * 0.5}
-        />
-        <Circle
-          cx={CENTER}
-          cy={CENTER}
-          r={CENTER * 0.7}
-          fill="none"
-          stroke={palette.primary}
-          strokeWidth={1.5}
-          opacity={0.2 + (sanctuary.shieldHealth / 100) * 0.4}
-          strokeDasharray="3,3"
         />
 
         {false && sanctuary.fogDensity > 0 && (
@@ -189,8 +178,6 @@ const styles = StyleSheet.create({
   container: {
     borderRadius: radius.sm,
     overflow: "hidden",
-    borderWidth: 1,
-    borderColor: palette.border,
     backgroundColor: palette.bg,
   },
 });

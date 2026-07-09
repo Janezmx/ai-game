@@ -1,0 +1,80 @@
+  • electron-builder  version=25.1.8 os=10.0.19045
+  • loaded configuration  file=e:\project\AIGame\electron-builder.json
+  • effective config  config=directories:
+  output: release
+  buildResources: build
+appId: com.aigame.boundary
+productName: 清醒边界
+files:
+  - filter:
+      - electron/**/*
+      - backend/**/*
+      - frontend/dist/**/*
+      - shared/**/*
+      - package.json
+extraMetadata:
+  main: electron/main.js
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: electron/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  language: '2052'
+mac:
+  target:
+    - dmg
+  icon: electron/icon.png
+linux:
+  target:
+    - AppImage
+  icon: electron/icon.png
+
+  • description is missed in the package.json  appPackageFile=e:\project\AIGame\package.json
+  • author is missed in the package.json  appPackageFile=e:\project\AIGame\package.json
+  • spawning        command=e:\project\AIGame\node_modules\app-builder-bin\win\x64\app-builder.exe node-dep-tree --dir e:\project\AIGame
+  • exited          command=app-builder.exe code=0 pid=14360 out=[]
+  • executing @electron/rebuild  electronVersion=33.4.11 arch=x64 buildFromSource=false appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=win32 arch=x64 electron=33.4.11 appOutDir=release\win-unpacked
+  • spawning        command=e:\project\AIGame\node_modules\app-builder-bin\win\x64\app-builder.exe unpack-electron --configuration [{"platform":"win32","arch":"x64","version":"33.4.11"}] --output e:\project\AIGame\release\win-unpacked --distMacOsAppName Electron.app
+  • map async       taskCount=2
+  • map async       taskCount=1
+  ⨯ Get "https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip": dial tcp 20.205.243.166:443: connectex: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+github.com/develar/app-builder/pkg/download.(*Downloader).follow.func1
+	/Users/runner/work/app-builder/app-builder/pkg/download/downloader.go:206
+github.com/develar/app-builder/pkg/download.(*Downloader).follow
+	/Users/runner/work/app-builder/app-builder/pkg/download/downloader.go:234
+github.com/develar/app-builder/pkg/download.(*Downloader).DownloadNoRetry
+	/Users/runner/work/app-builder/app-builder/pkg/download/downloader.go:128
+github.com/develar/app-builder/pkg/download.(*Downloader).Download
+	/Users/runner/work/app-builder/app-builder/pkg/download/downloader.go:112
+github.com/develar/app-builder/pkg/electron.(*ElectronDownloader).doDownload
+	/Users/runner/work/app-builder/app-builder/pkg/electron/electronDownloader.go:203
+github.com/develar/app-builder/pkg/electron.(*ElectronDownloader).Download
+	/Users/runner/work/app-builder/app-builder/pkg/electron/electronDownloader.go:188
+github.com/develar/app-builder/pkg/electron.downloadElectron.func1.1
+	/Users/runner/work/app-builder/app-builder/pkg/electron/electronDownloader.go:73
+github.com/develar/app-builder/pkg/util.MapAsyncConcurrency.func2
+	/Users/runner/work/app-builder/app-builder/pkg/util/async.go:68
+runtime.goexit
+	/Users/runner/hostedtoolcache/go/1.21.13/arm64/src/runtime/asm_amd64.s:1650  
+  • exited          command=app-builder.exe code=1 pid=30724
+  ⨯ e:\project\AIGame\node_modules\app-builder-bin\win\x64\app-builder.exe process failed ERR_ELECTRON_BUILDER_CANNOT_EXECUTE
+Exit code:
+1  failedTask=build stackTrace=Error: e:\project\AIGame\node_modules\app-builder-bin\win\x64\app-builder.exe process failed ERR_ELECTRON_BUILDER_CANNOT_EXECUTE
+Exit code:
+1
+    at ChildProcess.<anonymous> (e:\project\AIGame\node_modules\builder-util\src\util.ts:255:14)
+    at Object.onceWrapper (node:events:639:26)
+    at ChildProcess.emit (node:events:524:28)
+    at ChildProcess.cp.emit (e:\project\AIGame\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1101:16)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:304:5)
+
+---

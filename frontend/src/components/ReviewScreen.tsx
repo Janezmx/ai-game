@@ -311,7 +311,7 @@ export default function ReviewScreen({
                   <Text style={styles.emptyHint}>暂无建议</Text>
                 )}
                 {/* 进步对比 */}
-                {round.assessment?.progressNote && (
+                {round.assessment?.progressNote && round.assessment.progressNote !== "首轮评估" && (
                   <View style={styles.progressNote}>
                     <Text style={styles.progressNoteText}>{round.assessment.progressNote}</Text>
                   </View>

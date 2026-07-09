@@ -78,8 +78,7 @@ function createInitialArtifacts(): Artifact[] {
     { id: "a1", name: "心盾", type: ArtifactType.Shield, description: "提升抵抗值", remainingCooldown: 0, maxCooldown: 3, power: 60 },
     { id: "a2", name: "真言镜", type: ArtifactType.Mirror, description: "降低NPC控制力", remainingCooldown: 0, maxCooldown: 4, power: 55 },
     { id: "a3", name: "破谎矛", type: ArtifactType.Spear, description: "强力降低NPC控制力", remainingCooldown: 0, maxCooldown: 5, power: 75 },
-    // 雾散灯（已隐藏，迷雾功能下架，状态逻辑保留）
-    // { id: "a4", name: "雾散灯", type: ArtifactType.Shield, description: "驱散迷雾", remainingCooldown: 0, maxCooldown: 3, power: 40 },
+    { id: "a4", name: "明辨铃", type: ArtifactType.Insight, description: "揭示建议回复，冷却3回合", remainingCooldown: 0, maxCooldown: 3, power: 0 },
   ];
 }
 
@@ -87,7 +86,7 @@ function createInitialSanctuary(level = 1): SanctuaryState {
   return {
     shieldHealth: Math.max(60, 100 - (level - 1) * 10),
     artifacts: createInitialArtifacts(),
-    equippedArtifacts: createInitialArtifacts().slice(0, 3),
+    equippedArtifacts: createInitialArtifacts(), // 默认4件全装备
     fogDensity: (level - 1) * 5,
     weather: Weather.Clear,
   };

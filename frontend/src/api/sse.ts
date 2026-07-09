@@ -16,6 +16,8 @@ export type SSEEventType =
   | "npc_name" | "npc_attack" | "dialogue_chunk" | "knowledge_point"
   // 对话
   | "chunk" | "control_level" | "shield_damage" | "fog" | "assessment"
+  // 洞察建议
+  | "alternatives"
   // 通用
   | "done" | "error";
 
@@ -153,6 +155,20 @@ export function chatWithNPC(
       usedArtifact,
       ...(levelContext || {}),
     },
+    onEvent,
+    signal
+  );
+}
+
+/** 明辨铃：基于当前对话上下文获取建议回复 */
+export function fetchInsight(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  onEvent: (event: SSEEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  return fetchSSE(
+    "/api/insight",
+    { messages },
     onEvent,
     signal
   );
