@@ -33,14 +33,14 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   title: {
-    fontSize: 42,
+    fontSize: 44,
     fontWeight: "700",
     color: "#e0e7ff",
     letterSpacing: 6,
     marginBottom: 12,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 18,
     color: "#818cf8",
     marginBottom: 48,
     letterSpacing: 2,
@@ -55,8 +55,8 @@ const styles = StyleSheet.create({
   },
   descText: {
     color: "#a5b4fc",
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 16,
+    lineHeight: 24,
     textAlign: "center",
   },
   startButton: {
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
   },
   startButtonText: {
     color: "#ffffff",
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "600",
     letterSpacing: 2,
   },

@@ -9,7 +9,7 @@ const STEPS: TutorialStep[] = [
     icon: "🌿",
     title: "守护你的心域",
     description:
-      "你的内心像一个需要守护的花园（心域）。操控会像迷雾一样侵蚀它，而你的目标，是守住边界不被入侵。",
+      "你的内心像一个需要守护的花园（心域）。操控话术会不断侵蚀它，而你的目标，是守住边界不被入侵。",
   },
   {
     id: "step2",
@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
     ...shadow.lift,
   },
   icon: {
-    fontSize: 48,
+    fontSize: 50,
     marginBottom: space.sm,
   },
   title: {
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
   desc: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 24,
+    lineHeight: 26,
     textAlign: "center",
     marginBottom: space.lg,
   },

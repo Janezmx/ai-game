@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
 import { GamePhase } from "@aigame/shared";
 import { getLevelKnowledgePoint } from "./KnowledgeCard";
+import { startWaterSound, stopWaterSound } from "../utils/sound";
 import {
   palette,
   radius,
@@ -49,13 +50,14 @@ function BreathingGuide({
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepsRef = useRef(0);
 
-  // 组件卸载时清理 interval
+  // 组件卸载时清理 interval 与流水声
   useEffect(() => {
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      stopWaterSound();
     };
   }, []);
 
@@ -64,6 +66,7 @@ function BreathingGuide({
     setIsActive(true);
     setPhase("inhale");
     stepsRef.current = 0;
+    startWaterSound();
 
     intervalRef.current = setInterval(() => {
       stepsRef.current++;
@@ -86,6 +89,7 @@ function BreathingGuide({
         clearInterval(intervalRef.current!);
         intervalRef.current = null;
         setIsActive(false);
+        stopWaterSound();
         onComplete();
       }
     }, 400);
@@ -189,18 +193,14 @@ function BoundaryDrawer({
   integrity: number;
   sides: number;
 }) {
-  const [paths, setPaths] = useState<{ points: { x: number; y: number }[] }[]>([]);
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  // 实时覆盖度：合并已完成路径和正在绘制的路径
+  // 实时覆盖度（只算当前这一笔）
   const liveCoverage = useMemo(() => {
-    const allSegments = [
-      ...paths,
-      ...(currentPath.length > 0 ? [{ points: currentPath }] : []),
-    ];
-    return calcCoverage(allSegments, sides);
-  }, [paths, currentPath, sides]);
+    if (currentPath.length === 0) return 0;
+    return calcCoverage([{ points: currentPath }], sides);
+  }, [currentPath, sides]);
 
   // 理想的边界形状路径
   const idealPoints = useMemo(() => getShapePoints(sides, 48), [sides]);
@@ -218,29 +218,19 @@ function BoundaryDrawer({
     }
 
     if (state === State.END) {
-      if (currentPath.length > 5) {
-        setPaths((prev) => [...prev, { points: currentPath }]);
-      }
-      setCurrentPath([]);
       setIsDrawing(false);
+      // 一笔完成后立刻判定覆盖度
+      if (currentPath.length > 5) {
+        const cov = calcCoverage([{ points: currentPath }], sides);
+        if (cov >= 80) {
+          onComplete(Math.max(integrity, Math.min(100, cov)));
+          return;
+        }
+      }
+      // 不达标：清空，必须重新一笔完成
+      setCurrentPath([]);
     }
   };
-
-  const completeDrawing = useCallback(() => {
-    // 用已完成路径的覆盖度作为评分
-    const finalCoverage = calcCoverage(paths, sides);
-    onComplete(Math.max(integrity, Math.min(100, finalCoverage)));
-  }, [paths, integrity, sides]);
-
-  // 画完一笔后检测覆盖度，达到 30% 或画满 3 笔自动完成
-  useEffect(() => {
-    if (paths.length >= 1) {
-      const cov = calcCoverage(paths, sides);
-      if (cov >= 30 || paths.length >= 3) {
-        completeDrawing();
-      }
-    }
-  }, [paths.length, sides, completeDrawing]);
 
   return (
     <View style={styles.drawContainer}>
@@ -248,7 +238,7 @@ function BoundaryDrawer({
       <Text style={styles.shapeLabel}>
         {sides <= 0 ? "⊙ 圆形" : `⬠ ${SHAPE_NAMES[sides] || "多边形"}(${sides}边)`}
       </Text>
-      <Text style={styles.drawHint}>边界就像心理防线——每一次描绘都是对自我的重新确认。描得越完整，越不容易被侵入。</Text>
+      <Text style={styles.drawHint}>边界就像心理防线——必须一笔完成，中途抬起则重新开始。</Text>
 
       <GestureHandlerRootView>
         <PanGestureHandler
@@ -265,7 +255,7 @@ function BoundaryDrawer({
                 </LinearGradient>
               </Defs>
 
-              {/* 理想边界（形状根据关卡变化） */}
+              {/* 理想边界（虚线引导） */}
               <Path
                 d={idealPathD}
                 fill="none"
@@ -275,25 +265,7 @@ function BoundaryDrawer({
                 opacity={0.7}
               />
 
-              {/* 已完成的路径 */}
-              {paths.map((seg, idx) => (
-                <Path
-                  key={`path-${idx}`}
-                  d={seg.points
-                    .map((p, i) =>
-                      i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`
-                    )
-                    .join(" ")}
-                  stroke={palette.primaryDark}
-                  strokeWidth={5}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  fill="none"
-                  opacity={0.95}
-                />
-              ))}
-
-              {/* 当前绘制中的路径 */}
+              {/* 当前绘制中的路径（只有一笔） */}
               {currentPath.length > 1 && (
                 <Path
                   d={currentPath
@@ -316,7 +288,7 @@ function BoundaryDrawer({
 
       <View style={styles.drawFooter}>
         <Text style={styles.drawProgress}>
-          边界完整性: {liveCoverage}%
+          边界完整性: {liveCoverage}% {isDrawing && "（抬笔后判定）"}
         </Text>
       </View>
     </View>
@@ -386,7 +358,7 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
       {/* 标题 */}
       <View style={styles.header}>
         <Text style={styles.title}>🌿 战后修复</Text>
-        <Text style={styles.subtitle}>重建心域边界，驱散入侵迷雾</Text>
+        <Text style={styles.subtitle}>重建心域边界，恢复内心安宁</Text>
       </View>
 
       {/* 步骤指示器 */}
@@ -424,7 +396,6 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
             <Text style={styles.completeTitle}>修复完成</Text>
             <Text style={styles.completeText}>
               边界完整性: {Math.round(repair.boundaryIntegrity)}%{"\n"}
-              迷雾驱散: {Math.round(60)}%{"\n"}
               护盾恢复至: {Math.round(sanctuary.shieldHealth)}%
             </Text>
 
@@ -454,7 +425,6 @@ const styles = StyleSheet.create({
     flex: 1,
     height: "auto",
     backgroundColor: palette.bg,
-    maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
@@ -647,7 +617,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   completeIcon: {
-    fontSize: 64,
+    fontSize: 66,
     marginBottom: space.md,
   },
   completeTitle: {
@@ -661,7 +631,7 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: fontSize.body,
     textAlign: "center",
-    lineHeight: 24,
+    lineHeight: 26,
     marginBottom: space.lg,
     fontFamily,
   },
@@ -689,7 +659,7 @@ const styles = StyleSheet.create({
     borderLeftColor: palette.green,
     width: "100%",
   },
-  eduReviewIcon: { fontSize: 28, marginBottom: space.xs },
+  eduReviewIcon: { fontSize: 30, marginBottom: space.xs },
   eduReviewTitle: {
     color: palette.green,
     fontSize: fontSize.sub,
@@ -707,7 +677,7 @@ const styles = StyleSheet.create({
   eduReviewDef: {
     color: palette.text,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontFamily,
     marginBottom: space.sm,
   },

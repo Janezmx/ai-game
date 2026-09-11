@@ -196,7 +196,7 @@ const styles = StyleSheet.create({
   definition: {
     color: palette.text,
     fontSize: fontSize.body,
-    lineHeight: 22,
+    lineHeight: 24,
     marginTop: space.xs,
   },
   sectionLabel: {
@@ -216,25 +216,25 @@ const styles = StyleSheet.create({
     color: palette.clay,
     fontSize: fontSize.body,
     marginRight: 8,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   bulletDotGreen: {
     color: palette.green,
     fontSize: fontSize.body,
     marginRight: 8,
-    lineHeight: 20,
+    lineHeight: 22,
     fontWeight: fontWeight.bold,
   },
   bulletText: {
     flex: 1,
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   caseText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 22,
+    lineHeight: 24,
     backgroundColor: palette.surfaceSoft,
     borderRadius: radius.md,
     padding: space.md,

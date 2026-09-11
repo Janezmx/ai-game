@@ -6,14 +6,11 @@
   },
   "files": [
     "electron/**/*",
-    "backend/**/*",
     "frontend/dist/**/*",
-    "shared/**/*",
+    "backend/.env.local",
     "package.json"
   ],
-  "asarUnpack": [
-    "backend/**/*"
-  ],
+  "npmRebuild": false,
   "extraMetadata": {
     "main": "electron/main.js"
   },

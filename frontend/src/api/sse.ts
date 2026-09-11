@@ -13,9 +13,9 @@
 
 export type SSEEventType =
   // NPC 生成
-  | "npc_name" | "npc_attack" | "dialogue_chunk" | "knowledge_point"
-  // 对话
-  | "chunk" | "control_level" | "shield_damage" | "fog" | "assessment"
+  | "npc_name" | "npc_identity" | "opening_line" | "npc_attack" | "dialogue_chunk" | "knowledge_point"
+  // 对话（assessing: 台词流结束，进入评估阶段）
+  | "chunk" | "control_level" | "shield_damage" | "fog" | "assessment" | "assessing"
   // 洞察建议
   | "alternatives"
   // 通用
@@ -98,9 +98,13 @@ export async function fetchSSE(
             }
           }
         } catch {
-          // data 可能是纯字符串，当做 chunk 处理
-          if (currentEvent === "chunk" || !currentEvent) {
-            onEvent({ type: "chunk", data: dataStr });
+          // data 无法 JSON.parse（如后端未 JSON.stringify 的裸错误文本）。
+          // 有事件头（event: xxx）时按原事件类型送达，确保 error/done 不被静默丢弃；
+          // 无事件头时视为 chunk。
+          const eventType = (currentEvent || "chunk") as SSEEventType;
+          onEvent({ type: eventType, data: dataStr });
+          if (eventType === "done" || eventType === "error") {
+            return;
           }
         }
         currentEvent = ""; // 重置 event 类型
@@ -144,8 +148,28 @@ export function chatWithNPC(
     levelNpcRole: string;
     levelTactics: string;
     levelScenario: string;
+    levelSignals?: string[];
     openingLine?: string;
-  }
+    /**
+     * NPC 固定身份（由生成阶段确定并下发，防止对话中途"妈妈变姐姐"等身份漂移）。
+     * npcRoleIdentity = 具体身份称谓（如"玩家母亲"），npcRelationship = 与玩家的关系描述。
+     */
+    npcRoleIdentity?: string;
+    npcRelationship?: string;
+    /** 本关除当前已展开场景外的其余并列子场景，后端将用于禁止 NPC 跑题 */
+    peerScenarios?: string[];
+    /**
+     * 明辨铃：玩家本轮"采纳"的建议。仅当玩家点击建议并（基本）原样发送时上报。
+     * 后端据此把该回应视为有意的抵抗行为（评估提示注入），并在最坏情况下保证
+     * NPC 操控力下降而非上升（确定性保底）。
+     */
+    insightChoice?: { text?: string; rationale?: string };
+  },
+  /**
+   * 本局会话 id：每开一局换一个新值，后端据此隔离对话历史。
+   * 不传则后端落到默认会话（跨局共用），历史上会导致新局开场白与上一局话题串场。
+   */
+  sessionId?: string
 ): Promise<void> {
   return fetchSSE(
     "/api/chat",
@@ -153,6 +177,7 @@ export function chatWithNPC(
       messages,
       sanctuary: playerSanctuary,
       usedArtifact,
+      ...(sessionId ? { sessionId } : {}),
       ...(levelContext || {}),
     },
     onEvent,
@@ -172,4 +197,40 @@ export function fetchInsight(
     onEvent,
     signal
   );
+}
+
+export interface ReviewCompleteParams {
+  npcContent: string;
+  playerContent: string;
+  trapType?: string;
+  playerStatus?: string;
+  dimensions?: object;
+  prevDimensions?: object | null;
+  roundNumber?: number; // 1-based 轮序号
+  levelTitle?: string;
+  /** 本轮实时评估是否走了兜底：后端据此禁止生成任何分数对比文案 */
+  degraded?: boolean;
+}
+
+/**
+ * 复盘文本补全：根据某一轮的对话原文生成完整复盘点评文本
+ * POST /api/review/complete → { ok, assessment }
+ */
+export async function fetchReviewComplete(
+  params: ReviewCompleteParams
+): Promise<{ assessment: Record<string, unknown> }> {
+  const response = await fetch("/api/review/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`复盘补全失败 ${response.status}: ${errText}`);
+  }
+  const data = await response.json();
+  if (!data?.ok) {
+    throw new Error(data?.error || "复盘补全失败");
+  }
+  return data;
 }

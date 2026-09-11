@@ -2,11 +2,20 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const { StringDecoder } = require("string_decoder");
+// 复盘报告本地存储层：与开发态 Next.js 路由（backend/app/api/reviews/route.ts）共用同一份实现
+const reviewStore = require("./review-store");
 const FRONTEND_PORT = 3008;
 const FRONTEND_DIR = path.join(__dirname, "..", "frontend", "dist");
 
 // 从打包的 backend 中读取环境变量
-let API_KEY = "", BASE_URL = "https://api.deepseek.com", MODEL = "deepseek-v4-pro";
+// 默认值统一为主模型 DeepSeek（与 backend/lib/llm.ts 的 DEFAULT_CONFIG 保持一致）
+let API_KEY = "", BASE_URL = "https://api.deepseek.com", MODEL = "deepseek-v4-flash";
+// 备用模型配置（主模型重试失败后自动降级，与 backend/lib/llm.ts 的 BACKUP_CONFIG 对齐）
+let BACKUP_API_KEY = "", BACKUP_BASE_URL = "https://open.bigmodel.cn/api/paas/v4", BACKUP_MODEL = "glm-4.7-flashx";
+// 评估专用模型（非推理模式）：评估段优先走该模型并显式关闭 thinking，避免先烧配额思考再输出。
+// 默认 deepseek-v4-pro（DeepSeek 平台，评估专用非推理模型）；EVAL_* 在 .env.local 显式配置，与主模型独立。
+let EVAL_API_KEY = "", EVAL_BASE_URL = "", EVAL_MODEL = "deepseek-v4-pro";
 function loadEnv() {
   try {
     const envPath = path.join(__dirname, "..", "backend", ".env.local");
@@ -19,35 +28,90 @@ function loadEnv() {
         if (key === "API_KEY") API_KEY = API_KEY || val;
         if (key === "BASE_URL") BASE_URL = val || BASE_URL;
         if (key === "MODEL_NAME") MODEL = val || MODEL;
+        if (key === "BACKUP_API_KEY") BACKUP_API_KEY = val;
+        if (key === "BACKUP_BASE_URL") BACKUP_BASE_URL = val;
+        if (key === "BACKUP_MODEL_NAME") BACKUP_MODEL = val;
+        if (key === "EVAL_API_KEY") EVAL_API_KEY = val;
+        if (key === "EVAL_BASE_URL") EVAL_BASE_URL = val;
+        if (key === "EVAL_MODEL_NAME") EVAL_MODEL = val || EVAL_MODEL;
       });
     }
   } catch {}
 }
 loadEnv();
 
-// 调用 DeepSeek API（使用 https 模块，带 json_object 模式）
-function callLLM(messages) {
+// 调用 LLM API（流式逐 chunk 回调，用于实时推送到前端）
+// cfg 可覆盖 model/baseUrl/apiKey，用于备用模型降级
+// opts.json=false 表示输出普通文本（对话台词），不强制 JSON 格式
+function callLLMStream(messages, onDelta, cfg, opts) {
+  const useModel = cfg?.model ?? MODEL;
+  const useBaseUrl = cfg?.baseUrl ?? BASE_URL;
+  const useApiKey = cfg?.apiKey ?? API_KEY;
+  const firstWithJson = opts?.json !== false;
+  // opts.maxTokens 可收窄输出上限（评估段 JSON 输出小，用较小上限防超量生成拖时间）
+  const maxTokens = opts?.maxTokens ?? 4095;
   return new Promise((resolve, reject) => {
-    // 先尝试 json_object 模式
     const post = (withJson) => {
       const body = JSON.stringify({
-        model: MODEL, messages, stream: false, temperature: 0.6, max_tokens: 8192,
+        model: useModel, messages, stream: true, temperature: 1, max_tokens: maxTokens,
         ...(withJson ? { response_format: { type: "json_object" } } : {}),
       });
       return new Promise((innerResolve, innerReject) => {
-        const url = new URL(BASE_URL.replace(/\/+$/, "") + "/chat/completions");
+        const url = new URL(useBaseUrl.replace(/\/+$/, "") + "/chat/completions");
         const opts = {
           hostname: url.hostname, port: url.port || 443, path: url.pathname,
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_KEY}`, "Content-Length": Buffer.byteLength(body) },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${useApiKey}`, "Content-Length": Buffer.byteLength(body) },
           timeout: 60000,
         };
         const req = https.request(opts, (res) => {
-          const chunks = [];
-          res.on("data", (c) => chunks.push(c));
+          if (res.statusCode !== 200) {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => innerResolve({ status: res.statusCode, data: Buffer.concat(chunks).toString("utf-8") }));
+            return;
+          }
+          let buffer = "";
+          let fullContent = "";
+          let rawData = "";
+          const utf8Decoder = new StringDecoder("utf-8");
+          res.on("data", (chunk) => {
+            const text = utf8Decoder.write(chunk);
+            rawData += text;
+            buffer += text;
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data: ")) continue;
+              const dataStr = trimmed.slice(6);
+              if (dataStr === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(dataStr);
+                const delta = parsed.choices?.[0]?.delta?.content || "";
+                if (delta) {
+                  fullContent += delta;
+                  if (onDelta) onDelta(delta);
+                }
+              } catch {}
+            }
+          });
           res.on("end", () => {
-            const data = Buffer.concat(chunks).toString("utf-8");
-            innerResolve({ status: res.statusCode, data });
+            let content = fullContent;
+            if (!content && rawData && rawData.trim()) {
+              // 兜底：部分模型/时段对 stream 不生效，返回整段 JSON（非 SSE 行）。
+              // 流式解析会漏掉它导致内容为空 → 此处从整段 JSON 提取正文，杜绝“空 LLM 响应”。
+              try {
+                const parsedWhole = JSON.parse(rawData.trim());
+                const wholeText =
+                  parsedWhole?.choices?.[0]?.message?.content || parsedWhole?.choices?.[0]?.text || "";
+                if (typeof wholeText === "string" && wholeText.trim()) {
+                  content = wholeText;
+                  if (onDelta) onDelta(wholeText);
+                }
+              } catch {}
+            }
+            innerResolve({ status: 200, data: content });
           });
         });
         req.on("error", (e) => innerReject(e));
@@ -57,9 +121,8 @@ function callLLM(messages) {
       });
     };
 
-    post(true).then(({ status, data }) => {
-      if (status === 400) {
-        // json_object 不支持，追加强制 JSON 约束后重试
+    post(firstWithJson).then(({ status, data }) => {
+      if (status === 400 && firstWithJson) {
         messages.push({ role: "system", content: "你必须严格输出合法的JSON格式，不要包含任何其他文字。" });
         return post(false);
       }
@@ -67,13 +130,227 @@ function callLLM(messages) {
       return { status, data };
     }).then(({ status, data }) => {
       if (status !== 200) throw new Error(`LLM ${status}: ${data.slice(0, 200)}`);
-      const parsed = JSON.parse(data);
-      const content = parsed.choices?.[0]?.message?.content || "";
-      if (!content) console.warn("[llm] empty content from response");
-      if (parsed.choices?.[0]?.finish_reason === "length") console.warn("[llm] response truncated (length limit)");
-      resolve(content);
+      resolve(data);
     }).catch((e) => reject(e));
   });
+}
+
+// 调用 LLM API（流式收集 chunks，支持 json_object 模式）
+// cfg 可覆盖 model/baseUrl/apiKey，用于备用模型降级
+function callLLM(messages, cfg, opts) {
+  const useModel = cfg?.model ?? MODEL;
+  const useBaseUrl = cfg?.baseUrl ?? BASE_URL;
+  const useApiKey = cfg?.apiKey ?? API_KEY;
+  const firstWithJson = opts?.json !== false;
+  // opts.maxTokens 可收窄输出上限（评估段 JSON 输出小，用较小上限防超量生成拖时间）
+  const maxTokens = opts?.maxTokens ?? 4095;
+  // 评估专用模型（deepseek-v4-pro）显式关闭 thinking：避免推理型模型先烧配额思考再输出
+  const disableThinking = !!cfg?.disableThinking;
+  return new Promise((resolve, reject) => {
+    const post = (withJson) => {
+      const body = JSON.stringify({
+        model: useModel, messages, stream: true, temperature: 1, max_tokens: maxTokens,
+        ...(disableThinking ? { thinking: { type: "disabled" } } : {}),
+        ...(withJson ? { response_format: { type: "json_object" } } : {}),
+      });
+      return new Promise((innerResolve, innerReject) => {
+        const url = new URL(useBaseUrl.replace(/\/+$/, "") + "/chat/completions");
+        const opts = {
+          hostname: url.hostname, port: url.port || 443, path: url.pathname,
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${useApiKey}`, "Content-Length": Buffer.byteLength(body) },
+          timeout: 60000,
+        };
+        const req = https.request(opts, (res) => {
+          if (res.statusCode === 400) {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => innerResolve({ status: 400, data: Buffer.concat(chunks).toString("utf-8") }));
+            return;
+          }
+          if (res.statusCode !== 200) {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => innerResolve({ status: res.statusCode, data: Buffer.concat(chunks).toString("utf-8") }));
+            return;
+          }
+          // 流式收集（同时缓存整段原文，兼容上游偶发返回“整段 JSON 而非 SSE 行”的情况）
+          let fullContent = "";
+          let rawData = "";
+          let buffer = "";
+          const utf8Decoder = new StringDecoder("utf-8");
+          res.on("data", (chunk) => {
+            const text = utf8Decoder.write(chunk);
+            rawData += text;
+            buffer += text;
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data: ")) continue;
+              const dataStr = trimmed.slice(6);
+              if (dataStr === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(dataStr);
+                const delta = parsed.choices?.[0]?.delta?.content || "";
+                fullContent += delta;
+              } catch {}
+            }
+          });
+          res.on("end", () => {
+            let content = fullContent;
+            if (!content && rawData && rawData.trim()) {
+              // 兜底：从整段 JSON 响应提取正文，避免上游非流式返回被误判为空响应
+              try {
+                const parsedWhole = JSON.parse(rawData.trim());
+                const wholeText =
+                  parsedWhole?.choices?.[0]?.message?.content || parsedWhole?.choices?.[0]?.text || "";
+                if (typeof wholeText === "string" && wholeText.trim()) content = wholeText;
+              } catch {}
+            }
+            innerResolve({ status: 200, data: content });
+          });
+        });
+        req.on("error", (e) => innerReject(e));
+        req.on("timeout", () => { req.destroy(); innerReject(new Error("LLM timeout")); });
+        req.write(body);
+        req.end();
+      });
+    };
+
+    post(firstWithJson).then(({ status, data }) => {
+      if (status === 400 && firstWithJson) {
+        messages.push({ role: "system", content: "你必须严格输出合法的JSON格式，不要包含任何其他文字。" });
+        return post(false);
+      }
+      if (status !== 200) throw new Error(`LLM ${status}: ${data.slice(0, 200)}`);
+      return { status, data };
+    }).then(async ({ status, data }) => {
+      if (status !== 200) throw new Error(`LLM ${status}: ${data.slice(0, 200)}`);
+      // 空/纯空白内容不算成功：推理型模型（GLM、DeepSeek 推理模式）常把 max_tokens 全烧在思考上，
+      // finish_reason=length 而正文 0 字符。此时追加"禁止思考"指令重试一次；仍为空则抛错，
+      // 让上层候选链（callLLMWithFallback / callLLMEvalWithFallback）继续换模型，
+      // 而不是把空串交给 extractJson 走兜底（那会产出 dimensions 全 50 的假成绩）。
+      if (!String(data || "").trim()) {
+        console.warn("[llm] empty content from response, retry once with no-thinking instruction");
+        messages.push({ role: "system", content: "直接输出最终 JSON 结果，禁止输出任何思考过程、解释或额外文字。" });
+        // 重试不带 json_object：若该模型不支持会先撞一次 400，而此处已用提示词强制 JSON 输出
+        const retry = await post(false);
+        if (retry.status !== 200) throw new Error(`LLM ${retry.status}: ${String(retry.data).slice(0, 200)}`);
+        if (!String(retry.data || "").trim()) throw new Error("Empty LLM content");
+        return { status: 200, data: retry.data };
+      }
+      return { status, data };
+    }).then(({ data }) => resolve(data)).catch((e) => reject(e));
+  });
+}
+
+// 带备用模型降级的调用封装：主模型（cfg 默认）失败后降级到备用模型。
+// 与 backend/lib/llm.ts 的 createChatCompletion 降级逻辑对齐。
+async function callLLMWithFallback(messages, cfg, opts) {
+  const primary = cfg || { model: MODEL, baseUrl: BASE_URL, apiKey: API_KEY };
+  try {
+    return await callLLM(messages, primary, opts);
+  } catch (primaryErr) {
+    console.error("[llm] 主模型请求失败:", (primaryErr && primaryErr.message) || primaryErr);
+    if (BACKUP_API_KEY && BACKUP_BASE_URL && BACKUP_MODEL) {
+      console.warn(`[llm] 降级到备用模型 ${BACKUP_MODEL}`);
+      return await callLLM(messages, { model: BACKUP_MODEL, baseUrl: BACKUP_BASE_URL, apiKey: BACKUP_API_KEY }, opts);
+    }
+    throw new Error("主模型请求失败，且未配置备用模型");
+  }
+}
+
+// 评估专用：评估专用非推理模型（deepseek-v4-pro + 关闭 thinking）最优先 →
+// 主模型（DeepSeek v4-flash，推理）兜底 → 备用模型（GLM，推理）再兜底。
+// 评估输出是固定 schema 的 JSON；优先用非推理模型避免先烧思考配额再输出，更快更稳，
+// 失败/超时才依次降级到主/备推理模型，保证评估等待关键路径不因慢模型排队而卡死。
+async function callLLMEvalWithFallback(messages, opts) {
+  const evalPrimary = { model: EVAL_MODEL, baseUrl: EVAL_BASE_URL || BASE_URL, apiKey: EVAL_API_KEY || API_KEY, disableThinking: true };
+  const primary = { model: MODEL, baseUrl: BASE_URL, apiKey: API_KEY };
+  const backup = { model: BACKUP_MODEL, baseUrl: BACKUP_BASE_URL, apiKey: BACKUP_API_KEY };
+  const seen = new Set();
+  for (const cand of [evalPrimary, primary, backup]) {
+    if (!cand.model || !cand.baseUrl || !cand.apiKey) continue;
+    // 按模型三要素去重：避免同一模型重复尝试（如 EVAL_MODEL_NAME 与 MODEL_NAME 相同）
+    const id = `${cand.model}|${cand.baseUrl}|${cand.apiKey}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    try {
+      return await callLLM(messages, cand, opts);
+    } catch (e) {
+      console.warn(`[llm] 评估模型 ${cand.model} 请求失败，尝试下一个候选:`, (e && e.message) || e);
+    }
+  }
+  throw new Error("评估模型请求全部失败");
+}
+
+// 台词流式调用（带备用模型降级）：供"台词生成"阶段使用，逐 delta 实时回调。
+// 默认主模型（DeepSeek）优先；opts.backupFirst=true 时备用模型优先（GLM 兜底）。
+async function callLLMStreamWithFallback(messages, onDelta, cfg, opts) {
+  const primary = cfg || { model: MODEL, baseUrl: BASE_URL, apiKey: API_KEY };
+  const backup = { model: BACKUP_MODEL, baseUrl: BACKUP_BASE_URL, apiKey: BACKUP_API_KEY };
+  const order = opts?.backupFirst ? [backup, primary] : [primary, backup];
+  let lastErr = null;
+  for (const cand of order) {
+    if (!cand.model || !cand.baseUrl || !cand.apiKey) continue;
+    try {
+      return await callLLMStream(messages, onDelta, cand, opts);
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[llm] 台词流式模型 ${cand.model} 请求失败，尝试下一个候选:`, (e && e.message) || e);
+    }
+  }
+  throw new Error("台词流式请求失败：" + ((lastErr && lastErr.message) || "全部候选失败"));
+}
+
+/** 统计文本中未闭合的 { 与 [ 数量（跳过字符串与转义） */
+function countUnclosed(text) {
+  let inStr = false;
+  let esc = false;
+  const stack = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") stack.push("{");
+    else if (c === "}") { if (stack.length && stack[stack.length - 1] === "{") stack.pop(); }
+    else if (c === "[") stack.push("[");
+    else if (c === "]") { if (stack.length && stack[stack.length - 1] === "[") stack.pop(); }
+  }
+  return {
+    braces: stack.filter((x) => x === "{").length,
+    brackets: stack.filter((x) => x === "[").length,
+  };
+}
+
+/**
+ * 针对 LLM 输出被 max_tokens 截断导致 JSON 未闭合的情况，尽力恢复。
+ * 策略：把文本补全闭合符后尝试解析；若失败，则逐个去掉末尾"残缺的最后一个字段"
+ * （即最后一段以逗号分隔的片段），再补全重试，最多若干次。这样即使最外层
+ * {…} 未闭合、或末尾字符串被硬截断，也能尽量保留前面已完整输出的字段。
+ */
+function tryParseTruncatedJson(raw) {
+  let text = raw;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const s = countUnclosed(text);
+    const cand = text + "]".repeat(s.brackets) + "}".repeat(s.braces);
+    try {
+      const p = JSON.parse(cand);
+      if (p && typeof p === "object") return p;
+    } catch {
+      // 继续
+    }
+    const lastComma = text.lastIndexOf(",");
+    if (lastComma < 0) break;
+    text = text.slice(0, lastComma);
+  }
+  return null;
 }
 
 // 解析 LLM JSON 输出（处理不完整 JSON / 纯文本回退）
@@ -83,13 +360,19 @@ function extractJson(text, context = "unknown") {
   let clean = text.replace(/```json\s*|```/g, "").trim();
   const first = clean.indexOf("{"), last = clean.lastIndexOf("}");
   if (first === -1 || last <= first) {
-    // 完全不含 JSON —— 尝试把整段文字当做对话内容兜底
+    // 完全不含 JSON —— 说明这一轮模型没有产出可用评估（常见于推理 token 吃满 max_tokens 后正文为空）。
+    // 仍返回可渲染对象避免前端崩溃，但必须打 degraded 标记：它的 dimensions/trapType 都是后续补的
+    // 假值，不能当成绩参与对比、结算或点评。
     console.warn(`[llm][${context}] no JSON found, using text as fallback`);
   // 尝试提取任何有意义的中文句子作为 nextDialogue
   const sentences = clean.match(/[\u4e00-\u9fff，。！？、；：""''（）]{6,}/g);
   const fallback = { nextDialogue: sentences?.[0] || "", alternatives: [] };
+  // 仅评估场景需要 degraded 语义（标记"本轮分数是兜底补出来的"），
+  // npc-gen / insight / review-complete 复用同一兜底时不加该字段，避免污染其它返回结构
+  if (context === "chat") fallback.degraded = true;
   return fallback;
   }
+  const rawClean = clean;
   clean = clean.slice(first, last + 1);
   try {
     return JSON.parse(clean);
@@ -104,6 +387,10 @@ function extractJson(text, context = "unknown") {
     // 3. 尝试移除非法转义字符
     const unescaped = clean.replace(/\\(?!["\\/bfnrtu])/g, "");
     try { return JSON.parse(unescaped); } catch {}
+    // 4. 针对 max_tokens 截断的恢复：补全闭合符 + 逐个剥离残缺末尾字段。
+    //    优先对未 slice 的原始文本尝试（slice 可能已丢失真正的尾部），再对裁剪版尝试。
+    const recovered = tryParseTruncatedJson(rawClean) || tryParseTruncatedJson(clean);
+    if (recovered) return recovered;
     throw new Error("Invalid JSON from LLM: " + e.message + " - content: " + clean.slice(0, 150));
   }
 }
@@ -122,10 +409,60 @@ const LEVEL_SEEDS = [
   { id: 5, title: "隐性歧视", subtitle: "微侵犯 · 预设质疑", role: "系统性的偏见者", tactics: "关怀式质疑、双重标准、标签化防御", style: "表面礼貌专业，话语暗含预设", kpId: "kp-bias" },
 ];
 
+// 每关难度参数（与 frontend/src/store/gameStore.ts 的 LEVEL_STATS 保持一致）
+const LEVEL_STATS = {
+  1: { resistance: 100, control: 50 },
+  2: { resistance: 90, control: 55 },
+  3: { resistance: 80, control: 60 },
+  4: { resistance: 70, control: 65 },
+  5: { resistance: 60, control: 70 },
+};
+
+// 单例会话存储（Electron 桌面应用为单用户，使用单一 session 累积跨轮次状态，
+// 与 backend/app/api/chat/route.ts 的 sessionId="default" 行为对齐）
+let session = {
+  messages: [],
+  npcName: "迷雾中的声音",
+  npcRoleIdentity: "",
+  npcRelationship: "",
+  fogDensity: 20,
+  shieldHealth: 80,
+  turnCount: 1,
+  playerResistance: 100,
+  npcControlLevel: 50,
+  assessments: [],
+  effectiveStreak: 0, // 玩家"有效防御"连续次数，用于后端自行判定 NPC 是否该认输
+};
+
+// 关卡切换/重新开始时重置会话（由 NPC 生成触发，确保每关状态独立）
+function resetSession(level) {
+  const stats = LEVEL_STATS[level] || LEVEL_STATS[1];
+  session = {
+    messages: [],
+    npcName: "迷雾中的声音",
+    npcRoleIdentity: "",
+    npcRelationship: "",
+    fogDensity: (level - 1) * 5,
+    shieldHealth: Math.max(60, 100 - (level - 1) * 10),
+    turnCount: 1,
+    playerResistance: stats.resistance,
+    npcControlLevel: stats.control,
+    assessments: [],
+    effectiveStreak: 0,
+  };
+}
+
 const NPC_PROMPT_TEMPLATE = `你是一个名为"清醒边界"的寓教心理防御游戏中的操控型NPC生成器。
 【角色】你是第{level}关「{title}」NPC——{subtitle}。你的角色是{role}。
 操控手法：{tactics}。说话风格：{style}。
 {scenarioLine}
+
+【重要：角色关系约束】
+- NPC的background和openingLine必须严格符合{role}的身份和场景
+- 如果本关是"职场"场景，NPC只能是上司/同事，严禁出现恋爱、家庭、朋友等非职场关系
+- 如果本关是"家庭"场景，NPC只能是亲属，严禁出现职场关系
+- 开场白必须基于{role}的身份说话，不能越界
+- 【身份唯一性铁律】先从"{role}"中选定且只选定一个具体身份（如：家庭关选定"玩家的母亲"，职场关选定"玩家的直属上司"），写入下方 npc.roleIdentity。本局 NPC 从头到尾只能是这一个身份，openingLine、background 与全部话术必须自洽于该身份与称谓；严禁中途变成同身份池中的其它角色（如"母亲"绝不能变成"姐姐""阿姨"等），也严禁把玩家称呼成与所选身份矛盾的关系。
 
 【教育要求】请为本关生成心理学知识点卡：
 - definition：一句话定义这是什么操控
@@ -134,7 +471,7 @@ const NPC_PROMPT_TEMPLATE = `你是一个名为"清醒边界"的寓教心理防�
 - caseStory：贴近生活的案例故事（80-120字）
 
 【输出格式】只输出一行合法JSON，不要加任何解释或代码块：
-{"npc":{"name":"NPC名称","personality":"性格描述","background":"与玩家的关系"},"openingLine":"开场白（严格基于场景展开，符合本关操控手法）","skill":{"name":"技能名","description":"描述","damage":15},"counterArtifactTypes":["shield"],"tactic":"{tactic}","openingAlternatives":[{"text":"玩家可以直接回复的对话（如'我记得很清楚…'）","rationale":"为什么这个回复有效"},{"text":"另一条可选的回复","rationale":"分析原因"}],"knowledgePoint":{"id":"{kpId}","tactic":"{title}","definition":"一句话定义该操控手法","signals":["可识别的信号1","信号2","信号3"],"healthyResponse":["健康回应示例1","示例2"],"caseStory":"80-120字的真实感案例故事"}}`;
+{"npc":{"name":"NPC名称","roleIdentity":"本局固定身份（如：玩家的母亲/玩家的直属上司），只能且必须是上面选定的唯一身份","relationship":"一句话说明与玩家的固定关系与称谓（如：我是玩家的母亲，玩家是我的孩子）","personality":"性格描述","background":"与玩家的关系（必须符合{role}身份，且与roleIdentity自洽）"},"openingLine":"开场白（严格基于{role}与roleIdentity身份展开，符合本关操控手法）","skill":{"name":"技能名","description":"描述","damage":15},"counterArtifactTypes":["shield"],"tactic":"{tactic}","openingAlternatives":[{"text":"玩家可以直接回复的对话（如'我记得很清楚…'）","rationale":"为什么这个回复有效"},{"text":"另一条可选的回复","rationale":"分析原因"}],"knowledgePoint":{"id":"{kpId}","tactic":"{title}","definition":"一句话定义该操控手法","signals":["可识别的信号1","信号2","信号3"],"healthyResponse":["健康回应示例1","示例2"],"caseStory":"80-120字的真实感案例故事"}}`;
 
 async function handleNPCGenerate(req, res, body) {
   const { level = 1, scenario } = body;
@@ -144,37 +481,117 @@ async function handleNPCGenerate(req, res, body) {
     : `场景可能涉及：${seed.scenarios}。`;
   const prompt = NPC_PROMPT_TEMPLATE.replace("{level}", level).replace("{title}", seed.title).replace("{subtitle}", seed.subtitle).replace("{role}", seed.role).replace("{tactics}", seed.tactics).replace("{style}", seed.style).replace("{tactic}", seed.tactics.split("、")[0]).replace("{kpId}", seed.kpId).replace("{scenarioLine}", scenarioLine);
 
-  const raw = await callLLM([{ role: "system", content: prompt }, { role: "user", content: `玩家关卡：第${level}关` }]);
+  const raw = await callLLMWithFallback([{ role: "system", content: prompt }, { role: "user", content: `玩家关卡：第${level}关` }]);
   const data = extractJson(raw, "npc-gen");
+
+  // 重置会话状态，开始本关（与 backend 每次 NPC 生成时初始化 session 对齐）
+  resetSession(level);
+  session.npcName = data.npc.name;
+  session.npcRoleIdentity = data.npc.roleIdentity || "";
+  session.npcRelationship = data.npc.relationship || "";
+  // 把开场白写入会话历史，保证后续对话围绕同一情境连贯推进
+  if (data.openingLine) {
+    session.messages.push({ role: "assistant", content: String(data.openingLine) });
+  }
+
+  // 强制覆盖 knowledgePoint.id 为当前关卡的标准 kpId，避免模型输出空/错误 id
+  if (data.knowledgePoint) {
+    data.knowledgePoint.id = seed.kpId || data.knowledgePoint.id;
+  }
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.write(sse("npc_name", data.npc.name));
-  res.write(sse("npc_attack", { openingLine: data.openingLine, skill: data.skill, counterArtifactTypes: data.counterArtifactTypes, tactic: data.tactic, openingAlternatives: data.openingAlternatives }));
+  res.write(sse("npc_identity", { roleIdentity: session.npcRoleIdentity, relationship: session.npcRelationship }));
+  // 独立 opening_line 事件下发 LLM 开场白（对齐 frontend/src/api/sse.ts 事件协议）。
+  // 仅当模型产出有效开场白才发送；漏输出时前端自动降级为本地预设开场白。
+  if (data.openingLine) res.write(sse("opening_line", String(data.openingLine)));
+  res.write(sse("npc_attack", { skill: data.skill, counterArtifactTypes: data.counterArtifactTypes, tactic: data.tactic, openingAlternatives: data.openingAlternatives }));
   if (data.knowledgePoint) res.write(sse("knowledge_point", data.knowledgePoint));
   res.write(sse("done", true));
   res.end();
 }
 
-const ASSESS_PROMPT = `分析玩家回应，只输出一行合法 JSON：
-{"trapType":"NPC本轮使用的具体操控手法（如：感受否定、能力贬低、内疚诱导）","playerStatus":"effective|shaken|trapped","dimensions":{"boundaryAwareness":0,"emotionalStability":0,"cognitiveClarity":0,"assertiveResponse":0},"nextDialogue":"NPC下一句话（重要：不能为空、不能是空白或标点、必须至少10个汉字且有实质内容）","whyNote":"为什么点评：用1句话解读NPC本轮操控手法，引用具体心理学概念","identificationTip":"本轮识别要点：指出NPC话术中具体哪个词/哪句话是操控信号，给出玩家可记住的观察线索（如：注意对方用'你总是'来绝对化否定你）","progressNote":"进步对比：根据本轮维度评分与上一轮对比，1句话反馈（如'你更坚定了'或'注意不要被带节奏'）。切勿填写'首轮评估'——第1轮留空字符串即可","conversationEnded":false}
+// 台词生成指令：NPC 对玩家最新消息的直接回应（纯文本，不经评估 JSON 生成）
+const DIALOGUE_PROMPT = `请以NPC身份直接说出你对玩家刚才那句话的下一句回应台词。
 
-【NPC认输规则】当玩家连续展现清晰的边界意识且 factsCheck>70 时，conversationEnded设为true，nextDialogue写一句认输台词（如"好吧，也许你是对的"）。`;
+【输出要求】
+1. 只输出这一句台词本身，不要输出 JSON、代码块、字段名、引号包裹或任何解释说明。
+2. 台词必须口语化、可直接说出口、有实质内容（至少10个汉字，可含标点）。
+3. 严格延续你的上一句发言与场景，围绕同一件事自然推进；不得与之前任何一句台词重复或近乎复述。
+4. 结合对话进程自然流露情绪：若玩家已连续展现出坚定的边界意识，你的语气可以逐渐松动、出现挫败感。`;
+
+/**
+ * 单维评分归一化：模型偶发按 0~1 小数制输出四维（0.62 本意是 62 分）。
+ * 只钳位不换算是线上事故根源——0.62 直接进结算会让
+ * resistDelta = 10 - 0.62/10 ≈ 9.94（本该 3.8），NPC 控制力被瞬间抽空；
+ * 前端复盘页同时把四维全显示成 1。
+ */
+function toPercentScore(v, fallback) {
+  const n = typeof v === "number" ? v : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  const percent = n > 0 && n < 1 ? n * 100 : n;
+  return Math.max(0, Math.min(100, Math.round(percent)));
+}
 
 const ASSESS_PROMPT_WITH_ALTERNATIVES = `分析玩家回应，只输出一行合法 JSON：
-{"trapType":"NPC本轮使用的具体操控手法（如：感受否定、能力贬低、内疚诱导）","playerStatus":"effective|shaken|trapped","dimensions":{"boundaryAwareness":0,"emotionalStability":0,"cognitiveClarity":0,"assertiveResponse":0},"nextDialogue":"NPC下一句话（重要：不能为空、不能是空白或标点、必须至少10个汉字且有实质内容）","alternatives":[{"text":"玩家可以直接说出口的回应语句。必须是可以直接念出来的完整对话句子（如'我记得很清楚'），严禁输出动作描述或行为指导（如'坚定地陈述记忆'这种是描述怎么说话，不能作为回应）","rationale":"为什么这个回应有效"}],"whyNote":"为什么点评：用1句话解读NPC本轮操控手法，引用具体心理学概念","identificationTip":"本轮识别要点：指出NPC话术中具体哪个词/哪句话是操控信号，给出玩家可记住的观察线索（如：注意对方用'你总是'来绝对化否定你）","progressNote":"进步对比：根据本轮维度评分与上一轮对比，1句话反馈（如'你更坚定了'或'注意不要被带节奏'）。切勿填写'首轮评估'——第1轮留空字符串即可","conversationEnded":false}
+{"trapType":"NPC本轮操控手法（如：感受否定、能力贬低、内疚诱导、煤气灯）","playerStatus":"effective|shaken|trapped","dimensions":{"boundaryAwareness":62,"emotionalStability":58,"cognitiveClarity":60,"assertiveResponse":55},"alternatives":[{"text":"可直接说出口的完整回应句（如'我记得很清楚'），严禁动作/行为指导","rationale":"为何有效"}],"whyNote":"用1句话引用具体心理学概念解读NPC本轮操控","identificationTip":"指出NPC话术中哪个词/哪句话是操控信号，给玩家可记住的观察线索","progressNote":"进步对比（1句）：仅当上下文中确实给出了上一轮维度评分时才写带数字的变化；否则必须原样输出“首轮评估”，严禁出现“相比上一轮/提升/退步”等比较措辞","conversationEnded":false}
 
-【NPC认输规则】当玩家连续展现清晰的边界意识且 factsCheck>70 时，conversationEnded设为true，nextDialogue写一句认输台词（如"好吧，也许你是对的"）。`;
+【说明】NPC的下一句台词已单独生成，你无需输出 nextDialogue。
+【评分铁律】dimensions 四维一律是 0~100 的整数分值（62 表示 62 分），严禁使用 0~1 小数（如 0.62）。
+【认输规则】玩家连续坚定守住边界时 conversationEnded 设为 true。`;
+
+// 台词文本清理：去掉模型偶发的 JSON 包裹/引号包裹/NPC：前缀等杂质
+function stripDialogueText(text) {
+  let t = String(text || "").replace(/[\uFFFD\uFFFE\uFFFF]/g, "").trim();
+  // 去掉 ```json ... ``` / ``` 包裹
+  t = t.replace(/```(?:json)?/g, "").trim();
+  // 若被引号包裹则去除首尾引号
+  if (t.length >= 2) {
+    const first = t[0];
+    const last = t[t.length - 1];
+    if ((first === '"' && last === '"') || (first === "“" && last === "”") || (first === "'" && last === "'") || (first === "‘" && last === "’")) {
+      t = t.slice(1, -1).trim();
+    }
+  }
+  // 去掉开头 "NPC："/"NPC:" 之类前缀
+  t = t.replace(/^(NPC|npc)\s*[：:]\s*/, "").trim();
+  // 若是整段 JSON 形如 {"nextDialogue":"..."}，尝试提取 nextDialogue 字段
+  if (t.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && typeof parsed === "object" && parsed.nextDialogue) return String(parsed.nextDialogue).trim();
+    } catch {}
+  }
+  return t;
+}
 
 async function handleChat(req, res, body) {
-  const { messages, sanctuary, conversation, usedArtifact, openingLine } = body;
-  const turnCount = (conversation?.turnCount || 0) + 1;
-  const playerResistance = conversation?.playerResistance ?? 100;
-  const npcControlLevel = conversation?.npcControlLevel ?? 50;
+  const { messages, sanctuary, usedArtifact, openingLine, insightChoice } = body;
+
+  // 状态累积：从服务端单例 session 读取当前值（与 backend/app/api/chat/route.ts 对齐）。
+  // 前端不传 conversation，状态由后端 session 维护，保证跨轮次正确累积。
+  // 若前端传来 sanctuary，同步迷雾/护盾（首轮初始化）。
+  if (sanctuary && session.turnCount <= 1) {
+    if (typeof sanctuary.fogDensity === "number") session.fogDensity = sanctuary.fogDensity;
+    if (typeof sanctuary.shieldHealth === "number") session.shieldHealth = sanctuary.shieldHealth;
+  }
+
+  const turnCount = session.turnCount;
+  const playerResistance = session.playerResistance;
+  const npcControlLevel = session.npcControlLevel;
   const sceneAnchor = openingLine || "（开场场景）";
+
+  // 身份锁定行：把生成阶段选定的具体身份（如"玩家母亲"）作为硬约束，防止对话中途改身份/称谓
+  const npcRoleIdentity = session.npcRoleIdentity || "";
+  const npcRelationship = session.npcRelationship || "";
+  const identityLockLine = npcRoleIdentity && npcRelationship
+    ? `【身份锁定（最高优先级）】你在这段关系中的固定身份是「${npcRoleIdentity}」，与玩家的关系固定为：${npcRelationship}。从第一句到结束你只能以这一身份、以相应称谓出现，称呼玩家也必须与这一关系一致；即使为了升级手法、变换话术也绝对禁止改变身份或对玩家的称呼（如把"妈妈"改成"姐姐""阿姨"）。`
+    : `【身份锁定（最高优先级）】你与玩家的具体身份与称谓以开场白自居者为准并全程保持不变（开场白自称"妈妈"就永远是妈妈），严禁中途改换身份或称谓，也不得把玩家称呼成别的身份。`;
 
   // 构建丰富的 NPC 角色提示词
   const npcPersona = `你是一个精于心理操控的NPC，正在试图侵入玩家的心域边界。
 【场景锚点】所有对话必须严格围绕以下开场白所确立的具体情境展开，不得偏离：${sceneAnchor}
+${identityLockLine}
 【对话连贯性】每一轮 nextDialogue 必须是上一句 NPC 发言与玩家最新回复的直接延续，围绕同一件事推进。
 【难度递进】当前第${turnCount}轮：
   - 1-3轮：使用明显可识别的操控手法
@@ -185,16 +602,119 @@ async function handleChat(req, res, body) {
 
   const isInsightArtifact = usedArtifact?.type === "Insight";
   console.log(`[chat] turn=${turnCount}, usedArtifact=${usedArtifact?.name || "none"}, type=${usedArtifact?.type || "none"}, insight=${isInsightArtifact}`);
+  // 提取玩家最新一条消息（前端传来的 messages 数组最后一条 user 消息）
+  const finalUserMessage =
+    (Array.isArray(messages) ? messages.filter((m) => m && m.role === "user").pop()?.content : undefined) || "";
+  // 明辨铃采纳元数据（与 backend/app/api/chat/route.ts 对齐）：前端在玩家点击建议并
+  // （基本）原样发送时随消息上报。采纳 = 玩家识别出操控话术、参考法器点拨后有意识地发出回应——
+  // 评估端按"有意抵抗"处理（计划A），控制结算保证至少小幅下降而非上升（计划B 保底）。
+  const adoptedInsightText =
+    insightChoice && typeof insightChoice.text === "string" ? String(insightChoice.text).trim() : "";
+  const adoptedInsightRationale =
+    insightChoice && typeof insightChoice.rationale === "string" ? String(insightChoice.rationale).trim() : "";
+  const adoptedInsight = adoptedInsightText.length > 0;
+  // 用 session.messages（服务端累积的对话历史）作为 LLM 上下文，而非前端传来的完整 messages
+  // （与 backend 一致：assistant 存 NPC 实际说出口的话，保证轮次间连贯）
+  const historyMsgs = session.messages.slice(-10);
+  const artifactLine = usedArtifact && !isInsightArtifact ? `[玩家使用了法器：${usedArtifact.name}]` : null;
+
+  // ============ 第一段：台词流式生成 ============
+  // 台词单独走一次 LLM 调用（纯文本，非 JSON），先发 SSE 头、边生成边推 chunk，
+  // 使前端首段台词上屏即收起等待卡片；评估在台词完整发出后才开始。
+  const dialogueMsgs = [
+    { role: "system", content: npcPersona },
+    ...historyMsgs,
+    { role: "user", content: finalUserMessage },
+    { role: "system", content: DIALOGUE_PROMPT },
+  ];
+  if (artifactLine) dialogueMsgs.push({ role: "system", content: artifactLine });
+
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  // 台词走"主模型优先"（deepseek-v4-flash 快而稳），失败自动降级 GLM 兜底
+  const dialogueFull = await callLLMStreamWithFallback(dialogueMsgs, (delta) => {
+    if (!res.writableEnded && delta) res.write(sse("chunk", delta));
+  }, undefined, { json: false });
+
+  let dialogueTextFinal = stripDialogueText(dialogueFull || "");
+  if (!dialogueTextFinal || Array.from(dialogueTextFinal).length < 3) {
+    console.warn("[chat] dialogue empty, using fallback. raw:", String(dialogueFull || "").slice(0, 100));
+    dialogueTextFinal = "……（沉默片刻）你继续说，我在听。";
+  }
+  // 台词段结束，通知前端进入评估期
+  res.write(sse("assessing", true));
+
+  // ============ 第二段：评估（台词完整发出后再发起）============
+  // 评估上下文同样回填本回合 NPC 台词（置于玩家回应之后），使评估可对照 NPC 原话
   const msgs = [
     { role: "system", content: npcPersona },
-    ...(messages || []),
-    { role: "system", content: ASSESS_PROMPT_WITH_ALTERNATIVES },
+    ...historyMsgs,
+    { role: "user", content: finalUserMessage },
   ];
-  if (usedArtifact && !isInsightArtifact) msgs.push({ role: "system", content: `[玩家使用了法器：${usedArtifact.name}]` });
+  if (artifactLine) msgs.push({ role: "system", content: artifactLine });
+  // 明辨铃采纳注入（计划A）：把"玩家有意采纳法器建议、有备而来"写进评估上下文，
+  // 让评估器把该回应视为经过策略权衡的有意抵抗而非随口一句话，
+  // 避免 assertiveResponse 被低估导致 NPC 操控值反而上升。
+  if (adoptedInsight) {
+    msgs.push({
+      role: "system",
+      content:
+        `[玩家采纳了明辨铃的建议] 玩家使用明辨铃后，郑重采纳了法器给出的建议作为本条回应：` +
+        `「${adoptedInsightText}」` +
+        (adoptedInsightRationale ? `（法器给出的理由：${adoptedInsightRationale}）` : "") +
+        `。玩家是在识别出对方操控话术、经过策略权衡后主动发出这条回应，这是有备而来的抵抗行为。` +
+        `评估 assertiveResponse（坚定回应）时请认可其有意的抵抗性：语气得体但立场坚定同样属于有力反击，` +
+        `请勿因为回应显得温和或书面就低估其抗操控强度。`,
+    });
+  }
+  msgs.push(
+    { role: "system", content: `【NPC本轮台词】${dialogueTextFinal}` },
+    { role: "system", content: ASSESS_PROMPT_WITH_ALTERNATIVES }
+  );
+  // 评估输出为固定 schema 的 JSON（实测约 500~1100 字符）。上限与 backend 的 ASSESS_MAX_TOKENS
+  // 对齐取 3072：推理型候选会先烧配额思考，2400 曾被 reasoning 吃满（finish_reason=length
+  // 累计 0 chars）导致评估正文完全没输出，只能走兜底。
+  // 评估候选链：评估专用非推理模型（关思考）→ 主模型 → 备用模型，空返回由 callLLM 内部重试 + 换候选兜住。
+  const raw = await callLLMEvalWithFallback(msgs, { maxTokens: 3072 });
 
-  const raw = await callLLM(msgs);
   const assessment = extractJson(raw, "chat");
   console.log(`[chat] assessment done, alternatives=${assessment.alternatives?.length || 0}`);
+  // dimensions 运行时兜底：模型偶发输出合法 JSON 却漏掉该键/结构不对时（不会触发解析失败 fallback），
+  // 直接补齐，否则推给前端会在结算读取 a.dimensions.boundaryAwareness 处抛 Cannot read properties of undefined
+  if (!assessment.dimensions || typeof assessment.dimensions !== "object") {
+    assessment.dimensions = {};
+    assessment.degraded = true;
+  }
+  for (const k of ["boundaryAwareness", "emotionalStability", "cognitiveClarity", "assertiveResponse"]) {
+    // 缺失/非法维度补成 50 是"假分"：必须标记 degraded，禁止当作真实成绩参与对比与结算
+    if (typeof assessment.dimensions[k] !== "number" || !Number.isFinite(assessment.dimensions[k])) {
+      assessment.degraded = true;
+    }
+    assessment.dimensions[k] = toPercentScore(assessment.dimensions[k], 50);
+  }
+  // trapType/playerStatus 运行时兜底：复盘界面 getTrapEmoji(trapType) 会对它 .includes，
+  //     模型漏掉该键时 undefined 会抛 Cannot read properties of undefined (reading 'includes')，统一补默认值
+  if (typeof assessment.trapType !== "string" || !assessment.trapType.trim()) {
+    assessment.trapType = "未识别";
+  }
+  if (!["effective", "shaken", "trapped"].includes(assessment.playerStatus)) {
+    assessment.playerStatus = "shaken";
+  }
+  // progressNote 运行时兜底：本关首轮（session.assessments 为空）没有可对比对象，但模型常无视提示词
+  // 编造“相比上一轮…提升”之类文案，导致复盘界面第一轮出现自相矛盾的对比句，这里强制改写为固定文案；
+  // 非首轮则丢弃自称“第一轮”或为空的文本。
+  const rawProgressNote =
+    typeof assessment.progressNote === "string" ? assessment.progressNote.trim() : "";
+  if (assessment.degraded) {
+    // degraded 轮的分数/文本是兜底补出来的：任何"相比上一轮下降X分"的对比都是拿假数据编的，
+    // 会让玩家误以为表现退步，这里一律替换为固定说明，不参与对比。
+    assessment.progressNote = "本轮评估未获取到有效数据";
+  } else if (session.assessments.length === 0) {
+    assessment.progressNote = "首轮评估";
+  } else if (!rawProgressNote || rawProgressNote.includes("第一轮")) {
+    assessment.progressNote = "";
+  } else {
+    assessment.progressNote = rawProgressNote;
+  }
   // 清理建议回复：去掉解释前缀和乱码，只保留可说的语句
   if (assessment.alternatives) {
     assessment.alternatives = assessment.alternatives.map((alt) => {
@@ -234,28 +754,70 @@ async function handleChat(req, res, body) {
       return { ...alt, text: text.trim() };
     }).filter((alt) => alt.text && alt.text.length >= 3); // 过滤掉空文本和太短的
   }
-  const dialogueText = (assessment.nextDialogue || "").trim();
-  if (!dialogueText || dialogueText.length < 3) {
-    console.warn("[chat] nextDialogue empty, using fallback. raw:", raw?.slice(0, 100));
-    assessment.nextDialogue = "……（沉默片刻）你继续说，我在听。";
-    // fallback：把 raw text 中看起来像对话的部分提取出来
-    const rawClean = (raw || "").replace(/```[\s\S]*?```/g, "").trim();
-    const lines = rawClean.split(/[。！？\n]/).filter((l) => l.trim().length > 5);
-    if (lines.length > 0) assessment.nextDialogue = lines[0].trim();
+  // 后端作为单一真理源判定 NPC 是否认输（与 backend 对齐）：
+  // 仅当连续 2 轮 effective 且当前控制 < 30 才视为 NPC 认输，避免单轮投降。
+  const isEffective = (assessment.playerStatus === "effective");
+  session.effectiveStreak = isEffective ? session.effectiveStreak + 1 : 0;
+  const npcSurrender = session.effectiveStreak >= 2 && session.npcControlLevel < 30;
+  if (npcSurrender || assessment.conversationEnded) {
+    if (npcSurrender) {
+      session.npcControlLevel = 0;
+      session.playerResistance = 100;
+    }
+    assessment.conversationEnded = npcSurrender;
   }
-  const dialogueTextFinal = (assessment.nextDialogue || "……（继续对话）").trim();
 
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  for (let i = 0; i < dialogueTextFinal.length; i += 3) {
-    res.write(sse("chunk", dialogueTextFinal.slice(i, i + 3)));
+  // 计算状态变化（先计算，后发送，确保后端是单一事实源）
+  const dim = assessment.dimensions;
+  if (dim && typeof dim.boundaryAwareness === "number" && typeof dim.assertiveResponse === "number") {
+    const resistDelta = 10 - dim.boundaryAwareness / 10;
+    // 单轮 NPC 操控变化幅度钳位到 ±15，防止 LLM 输出异常评分时出现跳变，
+    // 导致玩家一句话就把 NPC 操控打归零而提前胜利。
+    const rawControlDelta = (50 - dim.assertiveResponse) / 5;
+    let controlDelta = Math.max(-15, Math.min(15, rawControlDelta || 0));
+    // 明辨铃保底（计划B）：即使评估模型对采纳建议的回应仍给偏低分（最不利情况），
+    // 玩家郑重采纳建议也应确定性地换取至少 6 点的 NPC 操控下降，绝不让操控值上升——
+    // 与上面的评估注入形成"评估端引导 + 结算端兜底"双重保障。
+    if (adoptedInsight && controlDelta > -6) {
+      controlDelta = -6;
+    }
+    session.playerResistance = Math.max(0, Math.min(100, session.playerResistance - resistDelta));
+    session.npcControlLevel = Math.max(0, Math.min(100, session.npcControlLevel + controlDelta));
+    // 迷雾：被操控（抵抗下降 / 操控上升）则变浓，有效应对则驱散，取两者均值
+    const fogDelta = Math.round((resistDelta + controlDelta) / 2);
+    session.fogDensity = Math.max(0, Math.min(100, session.fogDensity + fogDelta));
   }
-  const resist = ((conversation?.playerResistance || 100) - (assessment.dimensions?.boundaryAwareness || 50) / 10);
-  const control = ((conversation?.npcControlLevel || 50) + (50 - (assessment.dimensions?.assertiveResponse || 50)) / 5);
-  res.write(sse("control_level", Math.max(0, Math.min(100, control))));
-  res.write(sse("shield_damage", Math.max(0, Math.min(100, resist))));
-  res.write(sse("fog", 0));
+
+  // 法器效果：使用法器确定性地驱散迷雾 / 降低操控（后端为单一事实源）
+  if (usedArtifact && usedArtifact.type) {
+    const power = Number(usedArtifact.power) || 50;
+    if (usedArtifact.type === "Shield") {
+      session.fogDensity = Math.max(0, session.fogDensity - power);
+    } else if (usedArtifact.type === "Mirror" || usedArtifact.type === "Spear") {
+      session.npcControlLevel = Math.max(0, Math.min(100, session.npcControlLevel - power));
+      session.fogDensity = Math.max(0, session.fogDensity - Math.round(power / 2));
+    }
+  }
+
+  // 发送评估事件（发送计算后的绝对值）
+  res.write(sse("control_level", session.npcControlLevel));
+  res.write(sse("shield_damage", session.playerResistance));
+  res.write(sse("fog", session.fogDensity));
   res.write(sse("assessment", assessment));
-  res.write(sse("done", { turnCount: (conversation?.turnCount || 0) + 1, playerResistance: resist, npcControlLevel: control }));
+
+  // 保存到会话历史（assistant 存 NPC 实际说出口的对话，而非整坨评估 JSON，保证轮次间连贯）
+  session.messages.push(
+    { role: "user", content: finalUserMessage },
+    { role: "assistant", content: dialogueTextFinal }
+  );
+  session.turnCount++;
+  session.assessments.push(assessment);
+
+  res.write(sse("done", {
+    turnCount: session.turnCount,
+    playerResistance: session.playerResistance,
+    npcControlLevel: session.npcControlLevel,
+  }));
   res.end();
 }
 
@@ -265,51 +827,312 @@ function startBackend() {
 }
 
 // 明辨铃：基于当前对话上下文生成建议回复
-const INSIGHT_PROMPT = `你是一个心理防御游戏的辅助导师。根据当前对话，帮玩家生成2-3条可以直接回复的替代话术。必须基于上一句 NPC 的话术来生成，让玩家可以选择最贴切的回应。
+// 目标校准：后端结算时 NPC 操控力是否下降取决于评估模型给出的 assertiveResponse（坚定回应分）与
+// playerStatus=effective。因此建议必须是真的能"拆穿操控 + 守住边界"的话术，而不是泛泛的安慰或对抗。
+const INSIGHT_PROMPT = `你是一个心理防御游戏中的「明辨铃」辅助导师。玩家的目标是识破并抵御 NPC 的心理操控（如煤气灯效应、情感绑架、贬低边界、模糊逻辑、身份否定、转移责任），守住自己的边界，让 NPC 的操控力下降。
 
-只输出一行合法JSON：
-{"alternatives":[{"text":"玩家可直接回复的原话（第一人称，禁止动作描述或建议性文字）","rationale":"为什么这条回复有效"}]}`;
+任务：先判断 NPC 最新一句台词正在使用哪种操控手法，再为玩家生成 3 条风格不同、且确实能削弱该操控的回复话术，供玩家直接点选发出。
+
+【每条建议必须做到】
+1. 能有效反击本轮操控：或直接点破对方话里的逻辑漏洞/偷换概念，或指出对方强加在自己身上的预设，或冷静重申事实与自己的真实感受，或干脆不接对方抛来的"自证/内疚"包袱；
+2. 只输出玩家可原样发送的第一人称口语原话，10~40 字为宜；严禁"你可以说/建议/试着/回应说"等引导词，严禁动作或表情描写，严禁第二人称替玩家说话；
+3. 语气坚定而克制：不道歉讨好，不歇斯底里攻击，不说教长篇讲道理，不陷入无休止自证。这样的回应才最有效。
+
+【三条必须策略错开】，例如：A. 直接戳破歪曲、重申事实（如"事实不是你说的那样…"）；B. 温和而明确地划出边界、把话题拉回正事；C. 反问其逻辑漏洞或拒绝接受莫须有的指责。
+
+rationale 用一句话说明：这条针对的是什么操控手法、为何能降低 NPC 的操控力。
+
+只输出一行合法 JSON，不要任何额外文字：
+{"alternatives":[{"text":"可直接发送的原话","rationale":"为什么这条有效"}]}`;
+
+// 明辨铃建议文本清洗：
+// 优先从模型输出中提取“可直接发送的原话”（引号内/冒号后片段），再做引导口吻剥离。
+// 关键改进：若严格清洗把文本剔空（例如模型只给了“你可以说：稳住心态”这类帮助型表述，
+// 剥离后不含第一人称被判空），则回退到“宽松提取”的片段——宁保留可读的原始话术，
+// 也绝不让后处理把全部建议误杀成空数组导致前端静默无提示。
+function cleanInsightText(input) {
+  const rawText = (input || "").replace(/[\uFFFD\uFFFE\uFFFF]/g, "").trim();
+  if (!rawText) return "";
+  // 宽松基准：引号内内容优先；否则取冒号/逗号后的建议片段
+  let loose = "";
+  const qm = rawText.match(/["\u2018\u201C]([^"'\u2018\u201C\u2019\u201D']+)["\u2019\u201D']/);
+  if (qm && qm[1].length > 2) loose = qm[1].trim();
+  else {
+    const afterPunct = rawText.split(/[：:，,]\s*/).pop();
+    if (afterPunct && afterPunct.length >= rawText.length * 0.3) loose = afterPunct.trim();
+  }
+  let text = loose || rawText;
+  text = text.replace(/^(可以|建议|试着|尝试|不妨|比如|例如|可以说|坚定[^，：:]{0,20}[地，]|冷静[地，])/g, "").trim();
+  text = text.replace(/^(陈述|表达|说明|告诉|指出|回应|回复|说|喊)(自己的|你的|对方的|，|。|\s)*/, "").trim();
+  if (text && !text.includes("我") && !text.includes("我们")) {
+    const advicePats = /^(坚持|保持|学会|记住|需要|应该|要努力|要勇敢|不要|别|永远|一定|必须|坚定|明确|勇敢|努力|试着|尝试)/;
+    if (advicePats.test(text)) {
+      text = text.replace(/^(不要|别)\s*/, "我不会").replace(/^(.*)/, (m) => advicePats.test(m) ? "我" + m : m);
+    }
+  }
+  const instructionVerbs = /^(\S{0,2})(陈述|表达|说明|告诉|指出)/;
+  if (text && !text.includes("我") && instructionVerbs.test(text)) text = "";
+  if (text && !/[我你他她它]/.test(text) && text.length < 10) text = "";
+  text = text.trim();
+  // 回退：清洗后内容太短/为空 → 用宽松提取的片段顶上，保证至少返回一句可发送的话
+  if (text.length < 3 && loose.length >= 3) text = loose;
+  return text;
+}
 
 async function handleInsight(req, res, body) {
   const { messages } = body;
-  const msgs = [
+  const baseMsgs = [
     { role: "system", content: INSIGHT_PROMPT },
     ...(messages || []).slice(-6), // 只取最近6条消息作为上下文
-    { role: "system", content: "请基于上一句NPC的话术生成替代回复。只输出JSON。" },
   ];
 
-  const raw = await callLLM(msgs);
-  const data = extractJson(raw, "insight");
-
-  // 复用相同的清理逻辑
-  if (data.alternatives) {
-    data.alternatives = data.alternatives.map((alt) => {
-      let text = (alt.text || "").replace(/[\uFFFD\uFFFE\uFFFF]/g, "").trim();
-      const qm = text.match(/["\u2018\u201C]([^"'\u2018\u201C\u2019\u201D']+)["\u2019\u201D']/);
-      if (qm && qm[1].length > 2) text = qm[1];
-      else {
-        const afterPunct = text.split(/[：:，,]\s*/).pop();
-        if (afterPunct && afterPunct.length >= text.length * 0.3) text = afterPunct;
+  // 封装“调用 + 解析 + 清洗”为可重试函数。
+  // 关键：LLM 空响应 / JSON 解析失败 / 网络异常都必须归约为返回 []，
+  // 由外层“自动重试一次”兜底，而不是直接抛错打断整条 SSE 流程（否则
+  // 会退回路由层 catch 发出 "Empty LLM response" 这类生硬错误）。
+  const askInsight = async (instruct) => {
+    try {
+      const raw = await callLLMWithFallback([...baseMsgs, { role: "system", content: instruct }]);
+      if (!raw || !raw.trim()) {
+        console.warn("[insight] LLM 返回空内容，视为无可用建议");
+        return [];
       }
-      text = text.replace(/^(可以|建议|试着|尝试|不妨|比如|例如|可以说|坚定[^，：:]{0,20}[地，]|冷静[地，])/g, "").trim();
-      text = text.replace(/^(陈述|表达|说明|告诉|指出|回应|回复|说|喊)(自己的|你的|对方的|，|。|\s)*/, "").trim();
-      if (text && !text.includes("我") && !text.includes("我们")) {
-        const advicePats = /^(坚持|保持|学会|记住|需要|应该|要努力|要勇敢|不要|别|永远|一定|必须|坚定|明确|勇敢|努力|试着|尝试)/;
-        if (advicePats.test(text)) {
-          text = text.replace(/^(不要|别)\s*/, "我不会").replace(/^(.*)/, (m) => advicePats.test(m) ? "我" + m : m);
+      let data = null;
+      try {
+        data = extractJson(raw, "insight");
+      } catch (e) {
+        console.warn("[insight] JSON 解析失败，视为无可用建议:", e && e.message);
+      }
+      const out = [];
+      if (data && Array.isArray(data.alternatives)) {
+        for (const alt of data.alternatives) {
+          const text = cleanInsightText(alt && alt.text);
+          const rationale = (alt && alt.rationale ? String(alt.rationale) : "").replace(/[\uFFFD\uFFFE\uFFFF]/g, "").trim();
+          if (text) out.push({ text, rationale });
         }
       }
-      const instructionVerbs = /^(\S{0,2})(陈述|表达|说明|告诉|指出)/;
-      if (text && !text.includes("我") && instructionVerbs.test(text)) text = "";
-      if (text && !/[我你他她它]/.test(text) && text.length < 10) text = "";
-      return { ...alt, text: text.trim() };
-    }).filter((alt) => alt.text && alt.text.length >= 3);
+      return out;
+    } catch (e) {
+      console.error("[insight] LLM 调用失败（进入自动重试）:", e && e.message);
+      return [];
+    }
+  };
+
+  let alternatives = [];
+  let failMessage = "";
+  try {
+    // 第一轮：标准指令
+    alternatives = await askInsight("请基于上一句NPC的话术生成替代回复。只输出JSON。");
+    // 一次可用建议都没有（模型空响应/输出风格/偶发波动）→ 自动重试一次并强调第一人称原话
+    if (!alternatives.length) {
+      console.warn("[insight] 首轮未得到可用建议，自动重试一次");
+      alternatives = await askInsight(
+        "你上一次生成的建议因“带引导词 / 非第一人称 / 内容为空”未通过校验。请重新生成：直接给出 3 条玩家能原样发送给NPC的回应，每条必须以“我”为说话人，不要引导词、冒号、引号或祈使句，不要解释。只输出JSON。"
+      );
+    }
+    if (!alternatives.length) {
+      failMessage = "明辨铃暂时没能生成合适的建议，请直接输入你的回应，或稍后再试。";
+      console.error("[insight] 两次尝试后仍无可用建议，向客户端发送 error 事件");
+    }
+  } catch (e) {
+    // 极端兜底：确保客户端至少收到明确的 error 事件，绝不悬挂在 loading 态
+    failMessage = "明辨铃暂时不可用，请稍后再试或直接输入你的回应。";
+    console.error("[insight] 明辨铃处理异常:", e && e.message);
   }
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  res.write(sse("alternatives", data.alternatives || []));
-  res.write(sse("done", true));
+  if (failMessage || !alternatives.length) {
+    // 明确失败：发送 error 事件而不是 data: []，让前端能给出可见提示
+    res.write(sse("error", failMessage || "明辨铃暂时没能生成合适的建议，请直接输入你的回应，或稍后再试。"));
+  } else {
+    res.write(sse("alternatives", alternatives));
+    res.write(sse("done", true));
+  }
   res.end();
+}
+
+// —— 复盘文本补全：对话期评估仅含数值，复盘长文本进入复盘界面后按轮补全（与 backend/app/api/review/complete/route.ts 对齐）——
+const REVIEW_COMPLETE_INSTRUCTION = (ctx) => `你是一名心理防御训练游戏的复盘分析师。玩家刚刚在本关「${ctx.levelTitle}」的对话中完成了一轮攻防，
+你需要为该轮生成结构化复盘点评文本，用于玩家进入复盘界面后逐轮回顾。
+
+【本回合对话实录】
+NPC 台词（操控方）：${ctx.npcContent}
+玩家回应：${ctx.playerContent}
+
+【该轮实时结算结果】
+识别的操控手法：${ctx.trapType}
+玩家状态判定：${ctx.playerStatus}
+四维评分：${ctx.dimensions}
+上一轮评分：${ctx.prevDimensions}
+
+请只输出一个合法 JSON 对象（禁止任何 JSON 之外的文字/代码块/首尾解释，首字符 {、尾字符 }）：
+{
+  "trapAnalysis": "一句话点破本轮对话中的操控陷阱",
+  "assessment": "心理分析师整体点评：评价玩家本轮回应的识别与防御表现（1-2句）",
+  "whyNote": "用1-2句话科普该操控为何有效：引用具体心理学概念（如认知失调、习得性无助、投射认同、煤气灯效应阶段），解释它为什么能让人动摇",
+  "identificationTip": "给出具体可操作的观察线索：玩家从哪句话/哪个词能识别出这是操控",
+  "progressNote": "进步对比反馈（1句）。若上方“上一轮评分”是“无（本回合为第一轮）”，必须原样输出“第一轮，暂无对比”，整句不得出现“相比”“上一轮”“提升”“退步”等比较措辞；否则基于上一轮评分写出具体维度变化（须含数字）",
+  "alternatives": [
+    {"text": "玩家可直接说出口的回应句", "rationale": "为何有效：如何打破操控逻辑"},
+    {"text": "玩家可直接说出口的回应句", "rationale": "为何有效：如何打破操控逻辑"},
+    {"text": "玩家可直接说出口的回应句", "rationale": "为何有效：如何打破操控逻辑"}
+  ]
+}
+
+说明：
+- alternatives.text 必须是玩家可直接说出口的话，禁止"你可以…/试着…"等建议口吻。
+- whyNote 要结合上方"识别的操控手法"具体展开，引用本关相关心理学概念。
+- progressNote 分两种情况：上一轮评分为“无（本回合为第一轮）”时只能输出“第一轮，暂无对比”，严禁编造对比内容；否则必须写出带数字的具体维度变化，且不得出现“第一轮”字样。`;
+
+async function handleReviewComplete(req, res, body) {
+  try {
+    const npcContent = String(body.npcContent || "").trim();
+    const playerContent = String(body.playerContent || "").trim();
+    if (!npcContent || !playerContent) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "缺少该轮对话原文（npcContent / playerContent）" }));
+      return;
+    }
+    const roundNumber = typeof body.roundNumber === "number" ? body.roundNumber : 0;
+    const isFirstRound = roundNumber > 0 ? roundNumber === 1 : !body.prevDimensions;
+    // 本轮实时评估是否走了兜底（dimensions 全 50 等假数据）：是则禁止生成任何分数对比文案
+    const degraded = body.degraded === true;
+    const prevText = degraded
+      ? "未获取到有效数据（本轮评分不可用，请勿输出任何数字对比）"
+      : body.prevDimensions
+        ? JSON.stringify(body.prevDimensions)
+        : isFirstRound
+          ? "无（本回合为第一轮）"
+          : "缺失（非首轮但缺少上一轮评分，请仅依据当前轮表现点评）";
+    const systemPrompt = REVIEW_COMPLETE_INSTRUCTION({
+      levelTitle: body.levelTitle || "心理操控防御",
+      npcContent,
+      playerContent,
+      trapType: body.trapType || "未识别",
+      playerStatus: body.playerStatus || "unknown",
+      dimensions: degraded
+        ? "未获取到有效数据（本轮评分是系统兜底占位值，不可信、不可引用）"
+        : body.dimensions
+          ? JSON.stringify(body.dimensions)
+          : "{}",
+      prevDimensions: prevText,
+    }) + (degraded
+      ? `\n\n【重要】本轮实时评估未获取到有效数据（评分是兜底占位值，不可信）。progressNote 必须原样输出「本轮评估未获取到有效数据」，严禁出现任何分数或维度对比；其余字段仍依据对话原文正常分析。`
+      : "");
+    const ask = () => callLLMWithFallback(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "请生成该轮复盘点评 JSON。" },
+      ],
+      undefined,
+      { maxTokens: 4096 }
+    );
+
+    let parsed = null;
+    try {
+      parsed = extractJson(await ask(), "review-complete");
+    } catch (e) {
+      // 解析失败自动重试一次
+      console.warn("[review/complete] 解析失败，自动重试:", e.message);
+      parsed = extractJson(
+        await callLLMWithFallback(
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: "请重新生成该轮复盘点评 JSON，务必只输出合法 JSON。" },
+          ],
+          undefined,
+          { maxTokens: 4096 }
+        ),
+        "review-complete-retry"
+      );
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+      res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "复盘文本生成失败", details: "模型输出无法解析" }));
+      return;
+    }
+
+    // 规范化字段（数值字段由前端 setRoundAssessment merge 保留，不回传）
+    const rawProgressNote =
+      typeof parsed.progressNote === "string" ? parsed.progressNote.trim() : "";
+    let progressNote;
+    if (degraded) {
+      // 本轮评分本身就是兜底假数据：模型若照提示词写出"某维度下降X分"，是拿假分编的，一律不采纳
+      progressNote = "本轮评估未获取到有效数据";
+    } else {
+      progressNote =
+        !isFirstRound && rawProgressNote.includes("第一轮")
+          ? ""
+          : rawProgressNote || (isFirstRound ? "第一轮，暂无对比" : "");
+    }
+    const assessment = {
+      trapAnalysis: parsed.trapAnalysis ?? "",
+      assessment: parsed.assessment ?? "",
+      whyNote: parsed.whyNote ?? "",
+      identificationTip: parsed.identificationTip ?? "",
+      progressNote,
+      alternatives: Array.isArray(parsed.alternatives) ? parsed.alternatives : [],
+    };
+
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, assessment }));
+  } catch (e) {
+    console.error("[review/complete] Error:", e && e.message);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "复盘文本生成失败", details: String((e && e.message) || e) }));
+    }
+  }
+}
+
+/**
+ * 复盘报告存档接口（生产态）
+ * GET    /api/reviews          → { ok, reports }
+ * GET    /api/reviews?id=<id>  → { ok, report }
+ * POST   /api/reviews          → { ok, id }   （同 id 走 upsert）
+ * DELETE /api/reviews?id=<id>  → { ok, removed }
+ * 与开发态 backend/app/api/reviews/route.ts 行为保持一致。
+ */
+function handleReviews(req, res, searchParams, body) {
+  const send = (status, payload) => {
+    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(payload));
+  };
+  try {
+    if (req.method === "GET") {
+      const id = searchParams.get("id");
+      if (id) {
+        const report = reviewStore.getReport(id);
+        if (!report) {
+          send(404, { error: "复盘报告不存在" });
+          return;
+        }
+        send(200, { ok: true, report });
+        return;
+      }
+      send(200, { ok: true, reports: reviewStore.listReports() });
+      return;
+    }
+    if (req.method === "POST") {
+      const saved = reviewStore.saveReport(body);
+      send(200, { ok: true, id: saved.id });
+      return;
+    }
+    if (req.method === "DELETE") {
+      const id = searchParams.get("id");
+      if (!id) {
+        send(400, { error: "缺少 id" });
+        return;
+      }
+      send(200, { ok: true, removed: reviewStore.deleteReport(id) });
+      return;
+    }
+    send(405, { error: "Method Not Allowed" });
+  } catch (e) {
+    console.error("[reviews] Error:", e && e.message);
+    send(500, { error: "复盘存档操作失败", details: String((e && e.message) || e) });
+  }
 }
 
 function startFrontend() {
@@ -321,12 +1144,18 @@ function startFrontend() {
         let parsed = {};
         try { parsed = JSON.parse(body || "{}"); } catch {}
         try {
-          if (req.url === "/api/npc/generate") {
+          // 复盘存档端点带查询参数（?id=），需按 pathname 分派
+          const urlObj = new URL(req.url, `http://localhost:${FRONTEND_PORT}`);
+          if (urlObj.pathname === "/api/reviews") {
+            handleReviews(req, res, urlObj.searchParams, parsed);
+          } else if (req.url === "/api/npc/generate") {
             await handleNPCGenerate(req, res, parsed);
           } else if (req.url === "/api/chat") {
             await handleChat(req, res, parsed);
           } else if (req.url === "/api/insight") {
             await handleInsight(req, res, parsed);
+          } else if (req.url === "/api/review/complete") {
+            await handleReviewComplete(req, res, parsed);
           } else {
             res.writeHead(404);
             res.end("Not Found");

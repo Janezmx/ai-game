@@ -8,6 +8,7 @@ import RepairScreen from "../components/RepairScreen";
 import ReviewScreen from "../components/ReviewScreen";
 import { useGameStore } from "../store/gameStore";
 import { GamePhase, LEVELS, GameRecord, Badge, ALL_BADGES } from "@aigame/shared";
+import { averageDimensions, averageOf } from "../utils/dimensions";
 import {
   palette,
   radius,
@@ -26,6 +27,7 @@ export default function GamePage() {
   const [showReview, setShowReview] = useState(false);
   const [newBadges, setNewBadges] = useState<Badge[]>([]);
   const [showHomeModal, setShowHomeModal] = useState(false);
+  const [showRetryModal, setShowRetryModal] = useState(false);
 
   const handlePrepareComplete = useCallback(() => {
     setPhase(GamePhase.DialogueBattle);
@@ -34,6 +36,11 @@ export default function GamePage() {
   const handleBattleComplete = useCallback((victory: boolean) => {
     setLastVictory(victory);
     setShowReview(true);
+    // 先把本局报告 id 定下来并落一次快照：即使玩家没看完复盘就离开，
+    // 也已经保留了本次对局的对话与四维评分（复盘长文本会在补全后再覆盖更新）
+    const state = useGameStore.getState();
+    state.ensureReportId();
+    void state.saveReviewReportDraft(victory);
   }, []);
 
   // 保存通关记录（在复盘完成时调用）
@@ -42,38 +49,46 @@ export default function GamePage() {
     const { review, currentLevel, badges: oldBadges } = state;
     const lvlCfg = LEVELS[currentLevel - 1];
     if (!lvlCfg) return;
-    const best = review.bestScores;
-    const avgScore = Math.round(
-      (best.boundaryAwareness + best.emotionalStability + best.cognitiveClarity + best.assertiveResponse) / 4
-    );
+    // 本局得分 = 本局各轮四维的平均值。不能用 review.bestScores（逐轮取最大值），
+    // 否则记录里存的永远是历史最高分，成长页雷达图与趋势只会向上爬、输了也不回落。
+    const sessionDims = averageDimensions(review.dimensionHistory) || review.bestScores;
+    const avgScore = averageOf(sessionDims);
     const record: GameRecord = {
       level: currentLevel,
       timestamp: Date.now(),
       victory,
       avgScore,
-      dimensions: best,
+      dimensions: sessionDims,
       levelTitle: lvlCfg.title,
+      // 关联复盘存档入口：拿不到 id 时保持 undefined，旧记录的卡片会自动不可点击
+      reportId: state.currentReportId || undefined,
     };
     state.addGameRecord(record);
     console.log("[record saved]", record);
 
-    // 解锁徽章
+    // 解锁徽章（仅在胜利时）
     const beforeUnlock = oldBadges.filter((b) => b.unlockedAt).map((b) => b.id);
-    const badgeMap: Record<number, string> = { 1: "gaslight_master", 2: "pua_resist", 3: "family_bound", 4: "net_guard", 5: "bias_breaker" };
-    const badgeId = badgeMap[currentLevel];
-    if (badgeId) state.unlockBadge(badgeId);
-    state.unlockBadge("first_clear");
-    if (avgScore >= 90) state.unlockBadge("perfect_defense");
-    const allCleared = LEVELS.every((_, i) =>
-      state.gameHistory.some((r) => r.level === i + 1)
-    );
-    if (allCleared) state.unlockBadge("all_clear");
+    if (victory) {
+      const badgeMap: Record<number, string> = { 1: "gaslight_master", 2: "pua_resist", 3: "family_bound", 4: "net_guard", 5: "bias_breaker" };
+      const badgeId = badgeMap[currentLevel];
+      if (badgeId) state.unlockBadge(badgeId);
+      state.unlockBadge("first_clear");
+      if (avgScore >= 90) state.unlockBadge("perfect_defense");
+      // 重新取最新状态（addGameRecord 后 state.gameHistory 可能尚未反映到闭包快照）
+      const freshState = useGameStore.getState();
+      const allCleared = LEVELS.every((_, i) =>
+        freshState.gameHistory.some((r) => r.level === i + 1 && r.victory)
+      );
+      if (allCleared) freshState.unlockBadge("all_clear");
+    }
 
     const afterState = useGameStore.getState();
     return afterState.badges.filter((b) => b.unlockedAt && !beforeUnlock.includes(b.id));
   }, []);
 
   const handleReviewComplete = useCallback(() => {
+    // 兜底保存：此时各轮长文本通常已补全，确保存下的是最完整版本
+    void useGameStore.getState().saveReviewReportDraft(lastVictory);
     const newlyUnlocked = saveGameRecord(lastVictory) || [];
     if (newlyUnlocked.length > 0) {
       setNewBadges(newlyUnlocked);
@@ -92,9 +107,19 @@ export default function GamePage() {
   const [showNextLevelModal, setShowNextLevelModal] = useState(false);
 
   const handleRepairComplete = useCallback(() => {
-    // 修复完成后弹出确认框
-    setShowNextLevelModal(true);
-  }, []);
+    // 修复完成后：胜利弹出下一关确认框；失败提供"重新挑战当前关卡"或"返回首页"
+    if (lastVictory) {
+      setShowNextLevelModal(true);
+    } else {
+      setShowRetryModal(true);
+    }
+  }, [lastVictory]);
+
+  const handleRetryLevel = useCallback(() => {
+    setShowRetryModal(false);
+    // 重置到当前关卡（保留心域/护盾），回到准备阶段后即可重新挑战
+    resetForLevel(currentLevel);
+  }, [resetForLevel, currentLevel]);
 
   const confirmNextLevel = useCallback(() => {
     setShowNextLevelModal(false);
@@ -135,7 +160,7 @@ export default function GamePage() {
   return (
     <GestureHandlerRootView style={styles.container}>
       {showReview ? (
-        <ReviewScreen onComplete={handleReviewComplete} />
+        <ReviewScreen onComplete={handleReviewComplete} victory={lastVictory} />
       ) : (
         <ScrollView
           style={styles.pageScroll}
@@ -190,10 +215,13 @@ export default function GamePage() {
       {newBadges.length > 0 && (
         <View style={styles.modalOverlay}>
           <View style={styles.badgeModalCard}>
-            {newBadges.map((badge) => (
-              <View key={badge.id} style={styles.badgeModalContent}>
-                <Text style={styles.badgeModalIcon}>{badge.icon}</Text>
-                <Text style={styles.badgeModalTitle}>🎉 获得新徽章！</Text>
+            <Text style={styles.badgeModalHeader}>🎉 恭喜获得新徽章</Text>
+            {newBadges.map((badge, idx) => (
+              <View key={badge.id} style={[styles.badgeModalContent, idx > 0 && styles.badgeModalDivider]}>
+                <View style={styles.badgeModalIconWrap}>
+                  <Text style={styles.badgeModalIcon}>{badge.icon}</Text>
+                </View>
+                <Text style={styles.badgeModalTitle}>获得新徽章！</Text>
                 <Text style={styles.badgeModalName}>{badge.name}</Text>
                 <Text style={styles.badgeModalDesc}>{badge.description}</Text>
               </View>
@@ -205,31 +233,91 @@ export default function GamePage() {
         </View>
       )}
 
-      {/* 下一关确认弹框 */}
+      {/* 下一关确认弹框（最后一关通关时显示全部通关文案） */}
       {showNextLevelModal && (
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalIcon}>🏆</Text>
-            <Text style={styles.modalTitle}>准备进入下一关</Text>
+            {currentLevel >= totalLevels ? (
+              <>
+                <Text style={styles.modalTitle}>恭喜全部通关！</Text>
+                <Text style={styles.modalDesc}>
+                  你已完成全部 {totalLevels} 关挑战，抵御了所有类型的心理操控。可以回到第 1 关再次练习，或回到首页查看成长记录。
+                </Text>
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={styles.modalCancelBtn}
+                    onPress={() => { setShowNextLevelModal(false); navigate("/"); }}
+                    accessibilityLabel="回到首页"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.modalCancelText}>回到首页</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.modalConfirmBtn}
+                    onPress={confirmNextLevel}
+                    accessibilityLabel="回到第 1 关"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.modalConfirmText}>回到第 1 关</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalTitle}>准备进入下一关</Text>
+                <Text style={styles.modalDesc}>
+                  你已经完成了本关的修复，准备好迎接第 {currentLevel + 1} 关的挑战了吗？
+                </Text>
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={styles.modalCancelBtn}
+                    onPress={() => setShowNextLevelModal(false)}
+                    accessibilityLabel="再等等"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.modalCancelText}>再等等</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.modalConfirmBtn}
+                    onPress={confirmNextLevel}
+                    accessibilityLabel="进入下一关"
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.modalConfirmText}>进入下一关</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* 挑战失败：重玩当前关卡确认弹框 */}
+      {showRetryModal && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalIcon}>🛡️</Text>
+            <Text style={styles.modalTitle}>心域未能守住</Text>
             <Text style={styles.modalDesc}>
-              你已经完成了本关的修复，准备好迎接第 {currentLevel + 1} 关的挑战了吗？
+              第 {currentLevel} 关 · {currentLevelCfg.title} 挑战失败。可以重新挑战当前关卡，或返回首页调整状态。
             </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.modalCancelBtn}
-                onPress={() => setShowNextLevelModal(false)}
-                accessibilityLabel="再等等"
+                onPress={() => { setShowRetryModal(false); navigate("/"); }}
+                accessibilityLabel="返回首页"
                 accessibilityRole="button"
               >
-                <Text style={styles.modalCancelText}>再等等</Text>
+                <Text style={styles.modalCancelText}>返回首页</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.modalConfirmBtn}
-                onPress={confirmNextLevel}
-                accessibilityLabel="进入下一关"
+                onPress={handleRetryLevel}
+                accessibilityLabel="重新挑战当前关卡"
                 accessibilityRole="button"
               >
-                <Text style={styles.modalConfirmText}>进入下一关</Text>
+                <Text style={styles.modalConfirmText}>重新挑战</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -239,12 +327,14 @@ export default function GamePage() {
       {/* 关卡转场覆盖层 */}
       {showLevelTransition && (
         <View style={styles.levelTransition}>
-          <Text style={styles.transitionLabel}>下一关</Text>
-          <Text style={styles.transitionTitle}>
-            第 {currentLevel} 关 · {currentLevelCfg.title}
-          </Text>
-          <Text style={styles.transitionSubtitle}>{currentLevelCfg.subtitle}</Text>
-          <Text style={styles.transitionHint}>准备迎接新的挑战...</Text>
+          <View style={styles.transitionCard}>
+            <Text style={styles.transitionLabel}>✨ 下一关</Text>
+            <Text style={styles.transitionTitle}>
+              第 {currentLevel} 关 · {currentLevelCfg.title}
+            </Text>
+            <Text style={styles.transitionSubtitle}>{currentLevelCfg.subtitle}</Text>
+            <Text style={styles.transitionHint}>准备迎接新的挑战...</Text>
+          </View>
         </View>
       )}
     </GestureHandlerRootView>
@@ -256,7 +346,6 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
     backgroundColor: palette.bg,
-    maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
@@ -283,7 +372,7 @@ const styles = StyleSheet.create({
     ...shadow.soft,
   },
   homeBtnText: {
-    fontSize: 18,
+    fontSize: 20,
   },
   levelTransition: {
     ...StyleSheet.absoluteFillObject,
@@ -292,32 +381,49 @@ const styles = StyleSheet.create({
     alignItems: "center",
     zIndex: 100,
   },
+  // 转场内容卡片：明显的背景框，凸显过渡
+  transitionCard: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.xl,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.xl,
+    marginHorizontal: space.lg,
+    width: "85%",
+    maxWidth: 460,
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "rgba(224, 176, 132, 0.7)",
+    ...shadow.lift,
+  },
   transitionLabel: {
     color: palette.primaryDark,
-    fontSize: fontSize.caption,
-    letterSpacing: 2,
-    marginBottom: 8,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 3,
+    marginBottom: space.sm,
     fontFamily,
   },
   transitionTitle: {
-    color: palette.surface,
-    fontSize: fontSize.heading,
+    color: palette.text,
+    fontSize: fontSize.display,
     fontWeight: fontWeight.bold,
     textAlign: "center",
-    marginBottom: 6,
+    marginBottom: space.sm,
+    lineHeight: fontSize.display + 6,
     fontFamily,
   },
   transitionSubtitle: {
-    color: palette.surfaceSoft,
-    fontSize: fontSize.body,
+    color: palette.textSoft,
+    fontSize: fontSize.sub,
     textAlign: "center",
     marginBottom: space.lg,
     fontFamily,
   },
   transitionHint: {
-    color: palette.surfaceSoft,
-    fontSize: fontSize.caption,
+    color: palette.primaryDark,
+    fontSize: fontSize.body,
     fontStyle: "italic",
+    textAlign: "center",
     fontFamily,
   },
   // 确认弹框
@@ -339,7 +445,7 @@ const styles = StyleSheet.create({
     ...shadow.lift,
   },
   modalIcon: {
-    fontSize: 40,
+    fontSize: 42,
     marginBottom: space.sm,
   },
   modalTitle: {
@@ -353,7 +459,7 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: fontSize.body,
     textAlign: "center",
-    lineHeight: 20,
+    lineHeight: 22,
     marginBottom: space.lg,
     fontFamily,
   },
@@ -385,26 +491,79 @@ const styles = StyleSheet.create({
     fontFamily,
   },
   badgeModalCard: {
+    width: "90%",
+    maxWidth: 460,
+    minWidth: 340,
     backgroundColor: palette.surface,
     borderRadius: radius.xl,
-    padding: space.lg,
-    marginHorizontal: space.lg,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.xl,
     alignItems: "center",
     borderWidth: 2,
     borderColor: "rgba(224, 176, 132, 0.5)",
     ...shadow.lift,
   },
-  badgeModalContent: { alignItems: "center", marginBottom: space.xs },
-  badgeModalIcon: { fontSize: 64, marginBottom: space.xs },
-  badgeModalTitle: { color: palette.peach, fontSize: fontSize.title, fontWeight: fontWeight.bold, marginBottom: space.xs, fontFamily },
-  badgeModalName: { color: palette.text, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, marginBottom: 4, fontFamily },
-  badgeModalDesc: { color: palette.textSoft, fontSize: fontSize.body, textAlign: "center", fontFamily },
-  badgeModalBtn: {
-    marginTop: space.md,
-    backgroundColor: palette.peach,
+  badgeModalHeader: {
+    color: palette.primaryDark,
+    fontSize: fontSize.heading,
+    fontWeight: fontWeight.bold,
+    textAlign: "center",
+    marginBottom: space.md,
+    letterSpacing: 1,
+    fontFamily,
+  },
+  badgeModalContent: {
+    width: "100%",
+    alignItems: "center",
     paddingVertical: space.sm,
-    paddingHorizontal: space.xl,
+  },
+  badgeModalDivider: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(224, 176, 132, 0.25)",
+    marginTop: space.sm,
+    paddingTop: space.md,
+  },
+  badgeModalIconWrap: {
+    width: 88,
+    borderRadius: 44,
+    backgroundColor: "rgba(224, 176, 132, 0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: space.sm,
+  },
+  badgeModalIcon: { fontSize: 54, lineHeight: 66 },
+  badgeModalTitle: {
+    color: palette.peach,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.semibold,
+    marginBottom: 4,
+    letterSpacing: 1,
+    fontFamily,
+  },
+  badgeModalName: {
+    color: palette.text,
+    fontSize: fontSize.title,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.xs,
+    textAlign: "center",
+    fontFamily,
+  },
+  badgeModalDesc: {
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 24,
+    textAlign: "center",
+    paddingHorizontal: space.sm,
+    fontFamily,
+  },
+  badgeModalBtn: {
+    marginTop: space.lg,
+    backgroundColor: palette.peach,
+    paddingVertical: space.sm + 2,
+    paddingHorizontal: space.xxl,
     borderRadius: radius.pill,
+    minWidth: 180,
+    alignItems: "center",
     ...shadow.soft,
   },
   badgeModalBtnText: { color: palette.text, fontSize: fontSize.sub, fontWeight: fontWeight.bold, fontFamily },

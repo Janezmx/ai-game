@@ -1,0 +1,57 @@
+- generic [ref=f1e3]:
+  - generic [ref=f1e56]:
+    - generic [ref=f1e57]: 选择关卡
+    - generic [ref=f1e58]: 已通关前 1 关，可选 1 ～ 2 关
+    - generic [ref=f1e59]:
+      - generic [ref=f1e60] [cursor=pointer]:
+        - generic [ref=f1e61]: ✓
+        - generic [ref=f1e63]:
+          - generic [ref=f1e64]: 第1关：煤气灯效应
+          - generic [ref=f1e65]: 否定感受 · 认知侵蚀
+        - generic [ref=f1e66]: 已通关
+      - generic [ref=f1e67] [cursor=pointer]:
+        - generic [ref=f1e68]: "2"
+        - generic [ref=f1e70]:
+          - generic [ref=f1e71]: 第2关：职场PUA
+          - generic [ref=f1e72]: 能力贬低 · 价值否定
+        - generic [ref=f1e73]: 新关卡
+    - generic [ref=f1e74] [cursor=pointer]: 取消
+  - generic [ref=f1e6]:
+    - generic [ref=f1e7]:
+      - generic [ref=f1e8]: 🌿 清醒边界
+      - generic [ref=f1e9]: 守护你的心域，识别并抵御无形操控
+      - generic [ref=f1e10]: 一款寓教于乐的心理防御游戏。在 AI 对话攻防中，学会识别煤气灯效应、职场PUA、 亲情绑架等操控手法，把每一次练习变成成长。
+    - generic [ref=f1e12]:
+      - generic [ref=f1e13]: 📖 学习进度
+      - generic [ref=f1e14]: 已掌握 0/5 种操控手法
+    - generic [ref=f1e16]: 🗺️ 五关修炼路线
+    - generic [ref=f1e17]:
+      - generic [ref=f1e18]:
+        - generic [ref=f1e19]: ✓
+        - generic [ref=f1e21]:
+          - generic [ref=f1e22]: 煤气灯效应
+          - generic [ref=f1e23]: 否定感受 · 认知侵蚀
+        - generic [ref=f1e24]: ✅
+      - generic [ref=f1e25]:
+        - generic [ref=f1e26]: "2"
+        - generic [ref=f1e28]:
+          - generic [ref=f1e29]: 职场PUA
+          - generic [ref=f1e30]: 能力贬低 · 价值否定
+      - generic [ref=f1e31]:
+        - generic [ref=f1e32]: "3"
+        - generic [ref=f1e34]:
+          - generic [ref=f1e35]: 亲情绑架
+          - generic [ref=f1e36]: 内疚诱导 · 牺牲叙事
+      - generic [ref=f1e37]:
+        - generic [ref=f1e38]: "4"
+        - generic [ref=f1e40]:
+          - generic [ref=f1e41]: 匿名网络攻击
+          - generic [ref=f1e42]: 群体极化 · 去人格化
+      - generic [ref=f1e43]:
+        - generic [ref=f1e44]: "5"
+        - generic [ref=f1e46]:
+          - generic [ref=f1e47]: 隐性歧视
+          - generic [ref=f1e48]: 微侵犯 · 预设质疑
+    - generic [active] [ref=f1e49] [cursor=pointer]: ⚔️ 开始修行
+    - generic [ref=f1e51] [cursor=pointer]: 📊 成长记录
+    - generic [ref=f1e53] [cursor=pointer]: 🔄 重置数据

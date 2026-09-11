@@ -27,7 +27,6 @@ export const palette = {
   peach: "#E0B084", // 提示/温暖
   clay: "#C97B6E", // 警示/受创
   blue: "#A7C4D4", // 信息/平静
-  fog: "#8FA3B0", // 迷雾/困惑（冷灰蓝，醒目但不刺眼）
 
   // 描边
   border: "#ECDFD0",
@@ -54,12 +53,12 @@ export const space = {
 } as const;
 
 export const fontSize = {
-  caption: 12,
-  body: 14,
-  sub: 16,
-  title: 20,
-  heading: 28,
-  display: 34,
+  caption: 14,
+  body: 16,
+  sub: 18,
+  title: 22,
+  heading: 30,
+  display: 36,
 } as const;
 
 export const fontWeight = {

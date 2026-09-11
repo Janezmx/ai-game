@@ -1,10 +1,10 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createChatCompletion } from "@/lib/llm";
 
 /**
  * 5个关卡的 NPC 生成提示词（数据驱动 + 教育框架）
- * 每个关卡在生成 NPC 的同时，一并产出「心理学知识点卡」与真实案例小故事，
- * 服务于"让玩家学会识别与抵御操控"的教育目标。
+ * 心理学知识点卡由前端按关卡静态提供（frontend/src/components/KnowledgeCard.tsx），
+ * 此处不再让模型输出，后端聚焦 NPC 建档与战斗数据。
  */
 interface LevelSeed {
   id: number;
@@ -17,7 +17,6 @@ interface LevelSeed {
   tacticExample: string;
   damage: number;
   counter: string[];
-  kpId: string;
 }
 
 const LEVEL_SEEDS: LevelSeed[] = [
@@ -33,7 +32,6 @@ const LEVEL_SEEDS: LevelSeed[] = [
     tacticExample: "记忆否认",
     damage: 15,
     counter: ["shield", "mirror"],
-    kpId: "kp-gaslight",
   },
   {
     id: 2,
@@ -47,7 +45,6 @@ const LEVEL_SEEDS: LevelSeed[] = [
     tacticExample: "比较打压",
     damage: 20,
     counter: ["shield", "mirror", "spear"],
-    kpId: "kp-pua",
   },
   {
     id: 3,
@@ -61,7 +58,6 @@ const LEVEL_SEEDS: LevelSeed[] = [
     tacticExample: "牺牲叙事",
     damage: 25,
     counter: ["mirror", "spear"],
-    kpId: "kp-family",
   },
   {
     id: 4,
@@ -75,7 +71,6 @@ const LEVEL_SEEDS: LevelSeed[] = [
     tacticExample: "群体围攻",
     damage: 30,
     counter: ["shield", "mirror"],
-    kpId: "kp-network",
   },
   {
     id: 5,
@@ -89,7 +84,6 @@ const LEVEL_SEEDS: LevelSeed[] = [
     tacticExample: "关怀式质疑",
     damage: 35,
     counter: ["shield", "mirror", "spear"],
-    kpId: "kp-bias",
   },
 ];
 
@@ -107,6 +101,61 @@ function extractJsonObject(raw: string): string {
   return text.trim();
 }
 
+/** 兜底：从原始文本中尽力提取关键 NPC 字段 */
+function fallbackNpcParse(raw: string): any {
+  const get = (key: string) => {
+    const m = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`));
+    return m?.[1]?.replace(/\\(.)/g, "$1") || "";
+  };
+  const name = get("name");
+  if (!name) return null;
+  return {
+    npc: {
+      name,
+      roleIdentity: get("roleIdentity"),
+      relationship: get("relationship"),
+      personality: get("personality"),
+      background: get("background"),
+    },
+    openingLine: get("openingLine") || "……",
+    skill: { name: get("skillName") || "", description: get("description") || "", damage: 15 },
+    counterArtifactTypes: ["shield"],
+    tactic: get("tactic"),
+    openingAlternatives: [],
+  };
+}
+
+/** 从可能不完整的文本中提取合法 JSON 对象 */
+function safeJsonParse(raw: string): any {
+  if (!raw) return null;
+  const candidates: string[] = [];
+
+  // 1. 完整截取
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first !== -1 && last > first) {
+    candidates.push(raw.slice(first, last + 1));
+  }
+
+  // 2. 尝试去掉最后一个字段的不完整值
+  for (const c of [...candidates]) {
+    try { return JSON.parse(c); } catch {}
+  }
+
+  // 3. 修复：去掉末尾未闭合的值
+  const fixed = candidates[0]?.replace(/:\s*"[^"]*$/m, ': ""').replace(/:\s*[\[{][^\]}\]]*$/m, ': null').replace(/,\s*[}\]]\s*$/, "");
+  if (fixed) {
+    try { return JSON.parse(fixed); } catch {}
+  }
+
+  // 4. 修复非法转义
+  if (candidates[0]) {
+    try { return JSON.parse(candidates[0].replace(/\\(?!["\\/bfnrtu])/g, "")); } catch {}
+  }
+
+  return null;
+}
+
 function buildLevelPrompt(seed: LevelSeed, scenario?: string): string {
   const scenarioLine = scenario
     ? `本关固定场景（开场白与全部话术必须严格基于此场景展开，不得切换到其他无关场景）：${scenario}`
@@ -122,35 +171,39 @@ ${scenarioLine}
 NPC的说话风格：
 ${seed.style}
 
-【教育要求】请为本关生成一张"心理学知识点卡"，帮助玩家认识这种操控手法：
-- definition：一句话定义，说明这是什么操控
-- signals：3-4 条识别信号（玩家可以从哪些话/行为中认出它）
-- healthyResponse：2-3 条健康应对话术示例（坚定、不自我怀疑的表达）
-- caseStory：一个贴近生活的真实案例小故事（80-120 字，第一人称或旁观视角均可，语气克制、有代入感）
+【重要：角色关系约束】
+- NPC的background必须严格符合"${seed.npcRole}"的身份和场景
+- 如果本关是"职场"场景，NPC只能是上司/同事，严禁出现恋爱、家庭、朋友等非职场关系
+- 如果本关是"家庭"场景，NPC只能是亲属，严禁出现职场关系
+- 开场白必须基于"${seed.npcRole}"的身份说话，不能越界
+- 【身份唯一性铁律】先从"${seed.npcRole}"中选定且只选定一个具体身份（如：家庭关选定"玩家的母亲"，职场关选定"玩家的直属上司"），写入下方 npc.roleIdentity。本局 NPC 从头到尾只能是这一个身份，openingLine、background 与全部话术必须自洽于该身份与称谓；严禁中途变成同身份池中的其它角色（如"母亲"绝不能变成"姐姐""阿姨"等），也严禁把玩家称呼成与所选身份矛盾的关系。
+
+【强制全中文】所有面向玩家展示的文本（npc.name、roleIdentity、relationship、openingLine、tactic、skill.name、skill.description 等）一律使用简体中文，严禁夹带任何英文单词或 JSON 字段名。
+
+【重要：开场白由你生成】
+- 请为玩家生成 NPC 在本关开局时对玩家说出的第一句台词 openingLine，它会作为对话起点直接展示给玩家。
+- openingLine 必须：
+  * 严格基于"${seed.npcRole}"的身份与${scenario ? "「本关固定场景」的具体情境" : "该关卡最典型的场景"}说话，直接、自然、口语化，让玩家可以紧接着回复；
+  * 话术中自然体现 1 种本关操控手法（可从「${seed.tactics}」中选用其一），像真实发生的情景，不要自我暴露、不要说教式解释"我在操控你"；
+  * 控制在 40-100 字的一句话或一小段，不要展开成长篇说教。
 
 请严格按照以下 JSON 格式返回（不要带有 markdown 代码块标记）：
 {
   "npc": {
     "name": "NPC名称",
+    "roleIdentity": "本局固定身份（如：玩家的母亲/玩家的直属上司），只能且必须是上面选定的唯一身份",
+    "relationship": "一句话说明与玩家的固定关系与称谓（如：我是玩家的母亲，玩家是我的孩子）",
     "personality": "描述NPC的外在魅力与内在操控性",
     "background": "与玩家的关系背景"
   },
-  "openingLine": "开场白：严格基于上方「本关固定场景」展开的一句符合本关操控手法的话，让玩家有练习识别的机会（不要偏离该场景）",
+  "openingLine": "NPC对玩家说的开场白第一句台词（严格基于身份与场景的操控话术）",
   "skill": {
     "name": "技能名称",
     "description": "技能描述（与该关卡的操控手法相关）",
     "damage": ${seed.damage}
   },
   "counterArtifactTypes": ${JSON.stringify(seed.counter)},
-  "tactic": "${seed.tacticExample}",
-  "knowledgePoint": {
-    "id": "${seed.kpId}",
-    "tactic": "${seed.title}",
-    "definition": "一句话定义",
-    "signals": ["识别信号1", "识别信号2", "识别信号3"],
-    "healthyResponse": ["健康应对话术1", "健康应对话术2"],
-    "caseStory": "真实案例小故事"
-  }
+  "tactic": "${seed.tacticExample}"
 }`;
 }
 
@@ -183,8 +236,29 @@ export async function POST(request: NextRequest) {
     ]);
 
     // 解析 JSON 响应（鲁棒处理：剥离 markdown、截取最外层 {}）
-    const cleanJson = extractJsonObject(npcData);
-    const parsed = JSON.parse(cleanJson);
+    let cleanJson = extractJsonObject(npcData);
+    let parsed = safeJsonParse(cleanJson) || fallbackNpcParse(cleanJson);
+
+    // 失败自动重试一次（DeepSeek 偶发流式截断/畸形）
+    if (!parsed) {
+      console.warn("[npc] NPC 解析失败，自动重试一次。原输出前100:", JSON.stringify(npcData.slice(0, 100)));
+      const retryData = await createChatCompletion([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `玩家当前状态：${playerContext}\n难度等级：${difficulty}\n关卡：第${levelId}关` },
+      ]);
+      cleanJson = extractJsonObject(retryData);
+      parsed = safeJsonParse(cleanJson) || fallbackNpcParse(cleanJson);
+      if (parsed) {
+        console.log("[npc] 重试解析成功。len:", retryData.length);
+      }
+    }
+
+    if (!parsed) {
+      return new NextResponse(
+        JSON.stringify({ error: "NPC 生成失败", details: `无法解析模型输出: ${cleanJson.slice(0, 200)}` }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     // 通过 SSE 流式返回 NPC 数据
     const encoder = new TextEncoder();
@@ -197,30 +271,38 @@ export async function POST(request: NextRequest) {
           )
         );
 
+        // 发送 NPC 固定身份（roleIdentity/relationship），供对话层锁定称谓、防止中途变身份
+        const npcRoleIdentity = parsed.npc?.roleIdentity || "";
+        const npcRelationship = parsed.npc?.relationship || "";
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "npc_identity",
+              data: { roleIdentity: npcRoleIdentity, relationship: npcRelationship },
+            })}\n\n`
+          )
+        );
+
+        // 发送 NPC 开场白（大模型生成的第一句台词，前端收到后上屏并解锁输入）
+        const openingLine = parsed.openingLine ? String(parsed.openingLine) : "";
+        if (openingLine) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "opening_line", data: openingLine })}\n\n`
+            )
+          );
+        }
+
         // 构建详细描述
         const personality = parsed.npc.personality || "";
         const background = parsed.npc.background || "";
         const npcDesc = `${personality}。${background}`;
 
-        // 流式发送描述文本（模拟逐字输出）
-        for (let i = 0; i < npcDesc.length; i += 5) {
-          const chunk = npcDesc.slice(i, i + 5);
+        // 直接下发完整描述文本（去掉人为限速，避免开场等待过长）
+        if (npcDesc) {
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ type: "dialogue_chunk", data: chunk })}\n\n`
-            )
-          );
-          await new Promise((r) => setTimeout(r, 30));
-        }
-
-        // 发送本关「心理学知识点卡」（含案例），供准备页/复盘页沉淀
-        if (parsed.knowledgePoint) {
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                type: "knowledge_point",
-                data: parsed.knowledgePoint,
-              })}\n\n`
+              `data: ${JSON.stringify({ type: "dialogue_chunk", data: npcDesc })}\n\n`
             )
           );
         }
@@ -233,7 +315,7 @@ export async function POST(request: NextRequest) {
               data: {
                 skill: parsed.skill,
                 counterArtifactTypes: parsed.counterArtifactTypes,
-                openingLine: parsed.openingLine,
+                // openingLine 已通过独立的 opening_line 事件先行下发
                 tactic: parsed.tactic,
               },
             })}\n\n`

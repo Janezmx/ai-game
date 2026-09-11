@@ -1,13 +1,16 @@
-import React, { useEffect } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  type DimensionValue,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
+import { NPCResponseAssessment, SavedReviewReport } from "@aigame/shared";
+import { fetchReviewComplete } from "../api/sse";
 import {
   palette,
   radius,
@@ -18,6 +21,12 @@ import {
   shadow,
 } from "../theme";
 import KnowledgeCard, { getLevelKnowledgePoint, TRAP_EMOJI_MAP } from "./KnowledgeCard";
+import {
+  averageDimensions,
+  averageOf,
+  normalizeDimensionScore,
+  normalizeDimensions,
+} from "../utils/dimensions";
 
 const STATUS_EMOJI: Record<string, string> = {
   effective: "✅",
@@ -32,7 +41,10 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /** 按操控手法中文名匹配 TRAP_EMOJI_MAP 的 id */
-function getTrapEmoji(type: string): string {
+function getTrapEmoji(type?: string): string {
+  // 兜底：后端评估偶发漏掉 trapType（输出合法 JSON 但键缺失），未归一化时 type 为
+  // undefined，走到 type.includes 会抛异常导致复盘/修复界面整页白屏
+  const safe = (type || "").trim();
   const idMap: Record<string, string> = {
     "煤气灯": "kp-gaslight",
     "职场PUA": "kp-pua",
@@ -42,7 +54,7 @@ function getTrapEmoji(type: string): string {
     "歧视": "kp-bias",
   };
   for (const [key, kpId] of Object.entries(idMap)) {
-    if (type.includes(key)) return TRAP_EMOJI_MAP[kpId] || "🎯";
+    if (safe.includes(key)) return TRAP_EMOJI_MAP[kpId] || "🎯";
   }
   return "🎯";
 }
@@ -58,6 +70,19 @@ function getAdvice(playerStatus: string): string {
     default:
       return "保持警惕，注意识别操控手法。";
   }
+}
+
+/** 该轮复盘长文本是否已补全：对话期评估仅含数值，三个关键长字段齐备才算完整 */
+function hasFullReviewText(
+  a: NPCResponseAssessment | null | undefined
+): boolean {
+  if (!a) return false;
+  return Boolean(
+    a.trapAnalysis?.trim() &&
+      a.whyNote?.trim() &&
+      Array.isArray(a.alternatives) &&
+      a.alternatives.length > 0
+  );
 }
 
 function ScoreBar({
@@ -84,8 +109,19 @@ function ScoreBar({
 
 export default function ReviewScreen({
   onComplete,
+  victory = false,
+  report,
+  onBack,
+  footer,
 }: {
   onComplete: () => void;
+  victory?: boolean;
+  /** 传入历史存档即进入只读模式：数据全部取自快照，不发请求、不写回 store */
+  report?: SavedReviewReport;
+  /** 只读模式下返回上一级的回调 */
+  onBack?: () => void;
+  /** 只读模式下替换底部按钮区（历史详情页用它承载导出/删除操作） */
+  footer?: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
   const {
@@ -94,36 +130,118 @@ export default function ReviewScreen({
     currentKnowledgePoint,
     markKnowledgeMastered,
   } = useGameStore();
-  const { rounds, bestScores } = review;
 
-  const knowledgePoint = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
+  const readOnly = !!report;
+  // 只读浏览历史存档时统一用快照数据，避免串入当前对局的实时状态
+  const rounds = report ? report.rounds : review.rounds;
+  // 旧存档里可能混入 0~1 小数制评分（0.62 本意是 62 分），读取时归一化，否则四维显示成 1
+  const bestScores = normalizeDimensions(report ? report.dimensions : review.bestScores);
+  const dimensionHistory = report
+    ? report.dimensionHistory
+    : review.dimensionHistory;
+  const level = report ? report.level : currentLevel;
+  // 本局表现 = 各轮四维的平均值。旧逻辑直接用 bestScores（逐轮取最大的峰值），
+  // 等于把本关历史最高分当成「本局成绩」，赢了不涨、输了也不回落。
+  const sessionScores = averageDimensions(dimensionHistory) || bestScores;
 
-  // 完成本关复盘 → 标记该知识点为已掌握（持久化）
+  const fallbackKp = getLevelKnowledgePoint(level);
+  const knowledgePoint = readOnly
+    ? report?.knowledgePoint || fallbackKp
+    : currentKnowledgePoint || fallbackKp;
+
+  // 仅胜利时才标记该知识点为已掌握。
+  // 同时标记 currentKnowledgePoint.id（后端返回的）和标准兜底 id，
+  // 这样即便模型生成的 id 异常（空/错误），标准 id 也能被记录，
+  // 避免成长记录页看不到已掌握。
   useEffect(() => {
-    if (knowledgePoint?.id) {
-      markKnowledgeMastered(knowledgePoint.id);
-    }
-  }, [knowledgePoint, markKnowledgeMastered]);
+    // 只读浏览历史存档不能改写成长进度
+    if (readOnly || !victory) return;
+    const idsToMark = new Set<string>();
+    if (currentKnowledgePoint?.id) idsToMark.add(currentKnowledgePoint.id);
+    if (fallbackKp?.id) idsToMark.add(fallbackKp.id);
+    idsToMark.forEach((id) => markKnowledgeMastered(id));
+  }, [currentKnowledgePoint, fallbackKp, markKnowledgeMastered, victory, readOnly]);
 
-  const avgScore = bestScores
-    ? Math.round(
-        (bestScores.boundaryAwareness +
-          bestScores.emotionalStability +
-          bestScores.cognitiveClarity +
-          bestScores.assertiveResponse) /
-          4
-      )
-    : 0;
+  const avgScore = averageOf(sessionScores);
 
   const effectiveCount = rounds.filter(
     (r) => r.assessment?.playerStatus === "effective"
   ).length;
   const totalRounds = rounds.length;
 
+  // —— 复盘文本补全：对话期评估仅含数值，缺失的复盘长文本进入复盘界面后按需补全 ——
+  const [completingIds, setCompletingIds] = useState<number[]>([]);
+  const reviewCompletedRef = useRef<Set<number>>(new Set());
+
+  /** 单轮补全：始终从 store 读取最新 round 数据，发起 /api/review/complete 并回写 */
+  const completeOne = useCallback(
+    (idx: number) => {
+      if (reviewCompletedRef.current.has(idx)) return; // 已在途/已完成，防重复（含手动点击竞态）
+      const s = useGameStore.getState();
+      const round = s.review.rounds[idx];
+      if (!round) return;
+      const assess = round.assessment;
+      const npc = round.npcMessage?.content;
+      const player = round.playerMessage?.content;
+      if (!assess || !npc || !player) {
+        reviewCompletedRef.current.add(idx); // 无对话原文/结算数值可补，跳过避免反复重试
+        return;
+      }
+      reviewCompletedRef.current.add(idx); // 先标记，防止重复请求
+      setCompletingIds((arr) => (arr.includes(idx) ? arr : [...arr, idx]));
+      fetchReviewComplete({
+        npcContent: npc,
+        playerContent: player,
+        trapType: assess.trapType,
+        playerStatus: assess.playerStatus,
+        dimensions: assess.dimensions,
+        prevDimensions:
+          s.review.rounds[idx - 1]?.assessment?.dimensions ?? null,
+        roundNumber: idx + 1,
+        levelTitle: level ? `第 ${level} 关` : undefined,
+        // 兜底轮的分数是占位值：告诉后端禁止据此生成"下降X分"之类的对比文案
+        degraded: assess.degraded === true,
+      })
+        .then((res) => {
+          const full = res.assessment as unknown as NPCResponseAssessment;
+          s.setRoundAssessment(idx, full);
+          if (full.whyNote) s.addWhyNote(full.whyNote);
+          // 补齐一轮就同步刷新存档：即使玩家中途离开，已生成的内容也已落盘
+          void s.saveReviewReportDraft(victory);
+        })
+        .catch((err) => {
+          console.warn("[review] 复盘点评补全失败:", err);
+          // 失败不保留完成标记：重进复盘界面或手动点击可再次补全
+          reviewCompletedRef.current.delete(idx);
+        })
+        .finally(() => {
+          setCompletingIds((arr) => arr.filter((i) => i !== idx));
+        });
+    },
+    [level, victory]
+  );
+
+  useEffect(() => {
+    // 只读浏览历史存档时不发起任何补全请求（存档里有什么就展示什么）
+    if (readOnly) return;
+    // 每个 round（含第 1 轮）都是「NPC 台词 + 玩家回复 + 评估」的完整对话轮，
+    // 只要评估缺复盘长文本就自动补全，不再跳过首轮。
+    rounds.forEach((r, idx) => {
+      if (!r.assessment) return;
+      if (hasFullReviewText(r.assessment)) return; // 关键长文本已齐（数值评估不算完整）
+      completeOne(idx);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rounds, completeOne, readOnly]);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <Text style={styles.title}>📋 心域复盘报告</Text>
-      <Text style={styles.subtitle}>回顾你的应对，识别操控套路</Text>
+      <Text style={styles.title}>
+        {readOnly ? `📋 第 ${level} 关复盘` : "📋 心域复盘报告"}
+      </Text>
+      <Text style={styles.subtitle}>
+        {readOnly ? "历史存档 · 只读浏览" : "回顾你的应对，识别操控套路"}
+      </Text>
 
       <ScrollView
         style={styles.scroll}
@@ -132,32 +250,32 @@ export default function ReviewScreen({
         {/* 综合评分卡片 */}
         <View style={styles.summaryCard}>
           <Text style={styles.summaryScore}>{avgScore}</Text>
-          <Text style={styles.summaryLabel}>综合防御评分</Text>
+          <Text style={styles.summaryLabel}>本局综合评分</Text>
           <Text style={styles.summarySub}>
             {totalRounds > 0
               ? `${effectiveCount}/${totalRounds} 轮有效防御`
               : "暂无数据"}
           </Text>
-          {bestScores && (
+          {sessionScores && (
             <View style={styles.bestScoresRow}>
               <ScoreBar
                 label="边界意识"
-                value={bestScores.boundaryAwareness}
+                value={sessionScores.boundaryAwareness}
                 color={palette.blue}
               />
               <ScoreBar
                 label="情绪稳定"
-                value={bestScores.emotionalStability}
+                value={sessionScores.emotionalStability}
                 color={palette.green}
               />
               <ScoreBar
                 label="认知清晰"
-                value={bestScores.cognitiveClarity}
+                value={sessionScores.cognitiveClarity}
                 color={palette.peach}
               />
               <ScoreBar
                 label="坚定回应"
-                value={bestScores.assertiveResponse}
+                value={sessionScores.assertiveResponse}
                 color={palette.clay}
               />
             </View>
@@ -192,7 +310,7 @@ export default function ReviewScreen({
         <Text style={styles.sectionTitleLarge}>📖 本课知识点</Text>
         <KnowledgeCard kp={knowledgePoint} />
 
-        {/* 每轮分析 */}
+        {/* 每轮分析：rounds 每项均为「NPC台词 + 玩家回复 + 评估」的完整一轮 */}
         {rounds.map((round, idx) => (
           <View key={idx} style={styles.roundCard}>
             <View style={styles.roundHeader}>
@@ -217,6 +335,15 @@ export default function ReviewScreen({
               )}
             </View>
 
+            {/* 兜底提示：本轮分数/手法是后端占位值（模型空返回或解析失败），不参与综合评分 */}
+            {round.assessment?.degraded && (
+              <View style={styles.degradedBanner}>
+                <Text style={styles.degradedText}>
+                  ⚠️ 本轮评估未获取到有效数据，分数仅供参考、不计入本局综合评分
+                </Text>
+              </View>
+            )}
+
             {/* NPC 话术 */}
             <Text style={styles.sectionLabel}>👾 NPC 说了什么</Text>
             <View style={styles.npcBubble}>
@@ -229,15 +356,36 @@ export default function ReviewScreen({
                 <View style={styles.trapRow}>
                   <Text style={styles.trapTag}>
                     {getTrapEmoji(round.assessment.trapType)}{" "}
-                    {round.assessment.trapType}
+                    {round.assessment.trapType || "未知操控"}
                   </Text>
                 </View>
 
-                {/* NPC 动机 */}
+                {/* NPC 动机（长文本延迟补全，缺失时显示 loading/可点击重试） */}
                 <Text style={styles.sectionLabel}>🎯 NPC 的动机</Text>
-                <Text style={styles.analysisText}>
-                  {round.assessment.trapAnalysis}
-                </Text>
+                {round.assessment.trapAnalysis ? (
+                  <Text style={styles.analysisText}>
+                    {round.assessment.trapAnalysis}
+                  </Text>
+                ) : readOnly ? (
+                  <Text style={styles.emptyHint}>该轮解析未生成</Text>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.emptyRetry}
+                    onPress={() => {
+                      reviewCompletedRef.current.delete(idx);
+                      completeOne(idx);
+                    }}
+                    disabled={completingIds.includes(idx)}
+                    accessibilityRole="button"
+                    accessibilityLabel="重试生成本轮动机解析"
+                  >
+                    <Text style={styles.emptyHint}>
+                      {completingIds.includes(idx)
+                        ? "正在生成本轮解析…"
+                        : "解析暂不可用，点此重试"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {/* 玩家回应 */}
                 {round.playerMessage && (
@@ -257,8 +405,8 @@ export default function ReviewScreen({
                   {getAdvice(round.assessment.playerStatus)}
                 </Text>
 
-                {/* 本轮科普点评（为什么 + 识别要点） */}
-                {round.assessment.whyNote && (
+                {/* 本轮科普点评（为什么 + 识别要点；延迟补全，缺失时 loading） */}
+                {round.assessment.whyNote ? (
                   <>
                     <Text style={styles.sectionLabel}>🔍 本轮科普点评</Text>
                     <View style={styles.whyBox}>
@@ -273,6 +421,23 @@ export default function ReviewScreen({
                       )}
                     </View>
                   </>
+                ) : readOnly ? (
+                  <Text style={styles.emptyHint}>该轮科普点评未生成</Text>
+                ) : completingIds.includes(idx) ? (
+                  <Text style={styles.emptyHint}>正在生成科普点评…</Text>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.emptyRetry}
+                    onPress={() => {
+                      reviewCompletedRef.current.delete(idx);
+                      completeOne(idx);
+                    }}
+                    disabled={false}
+                    accessibilityRole="button"
+                    accessibilityLabel="重试生成科普点评"
+                  >
+                    <Text style={styles.emptyHint}>科普点评暂不可用，点此重试</Text>
+                  </TouchableOpacity>
                 )}
 
                 {/* 维度评分 */}
@@ -280,7 +445,7 @@ export default function ReviewScreen({
                   {Object.entries(round.assessment.dimensions).map(
                     ([key, val]) => (
                       <View key={key} style={styles.dimItem}>
-                        <Text style={styles.dimValue}>{Math.round(val)}</Text>
+                        <Text style={styles.dimValue}>{normalizeDimensionScore(val)}</Text>
                         <Text style={styles.dimLabel}>
                           {key === "boundaryAwareness"
                             ? "边界"
@@ -307,11 +472,18 @@ export default function ReviewScreen({
                       </View>
                     </View>
                   ))
+                ) : completingIds.includes(idx) ? (
+                  <Text style={styles.emptyHint}>正在生成…</Text>
                 ) : (
                   <Text style={styles.emptyHint}>暂无建议</Text>
                 )}
-                {/* 进步对比 */}
-                {round.assessment?.progressNote && round.assessment.progressNote !== "首轮评估" && (
+                {/* 进步对比：首轮没有可对比的上一轮数据，一律不展示；兜底轮不做任何分数对比 */}
+                {idx > 0 &&
+                  !round.assessment?.degraded &&
+                  round.assessment?.progressNote &&
+                  round.assessment.progressNote !== "首轮评估" &&
+                  round.assessment.progressNote !== "第一轮，暂无对比" &&
+                  round.assessment.progressNote !== "本轮评估未获取到有效数据" && (
                   <View style={styles.progressNote}>
                     <Text style={styles.progressNoteText}>{round.assessment.progressNote}</Text>
                   </View>
@@ -322,9 +494,21 @@ export default function ReviewScreen({
         ))}
       </ScrollView>
 
-      <TouchableOpacity style={styles.completeBtn} onPress={onComplete} activeOpacity={0.85} accessibilityLabel="完成复盘，进入修复" accessibilityRole="button">
-        <Text style={styles.completeBtnText}>进入修复 →</Text>
-      </TouchableOpacity>
+      {readOnly && footer ? (
+        footer
+      ) : (
+        <TouchableOpacity
+          style={styles.completeBtn}
+          onPress={readOnly ? onBack || onComplete : onComplete}
+          activeOpacity={0.85}
+          accessibilityLabel={readOnly ? "返回成长记录" : "完成复盘，进入修复"}
+          accessibilityRole="button"
+        >
+          <Text style={styles.completeBtnText}>
+            {readOnly ? "← 返回" : "进入修复 →"}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -333,9 +517,8 @@ const styles = StyleSheet.create({
   container: {
     display: "flex",
     flexDirection: "column",
-    height: "100vh",
+    height: "100vh" as DimensionValue,
     backgroundColor: palette.bg,
-    maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
@@ -366,7 +549,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     ...shadow.soft,
   },
-  summaryScore: { color: palette.primaryDark, fontSize: 48, fontWeight: fontWeight.bold, fontFamily },
+  summaryScore: { color: palette.primaryDark, fontSize: 50, fontWeight: fontWeight.bold, fontFamily },
   summaryLabel: { color: palette.textSoft, fontSize: fontSize.caption, marginBottom: 2, fontFamily },
   summarySub: { color: palette.textFaint, fontSize: fontSize.caption, marginBottom: space.md, fontFamily },
   bestScoresRow: { width: "100%", gap: 4 },
@@ -376,7 +559,8 @@ const styles = StyleSheet.create({
     gap: 6,
     marginVertical: 1,
   },
-  scoreLabel: { color: palette.textSoft, fontSize: fontSize.caption, width: 56, fontFamily },
+  // 固定宽度需容纳最长的四字标签（如「边界意识」），14px 字号下四字约 56px，故留到 68 不折行
+  scoreLabel: { color: palette.textSoft, fontSize: fontSize.caption, width: 68, fontFamily },
   scoreTrack: {
     flex: 1,
     height: 6,
@@ -388,7 +572,7 @@ const styles = StyleSheet.create({
   scoreValue: {
     color: palette.textSoft,
     fontSize: fontSize.caption,
-    width: 28,
+    width: 32,
     textAlign: "right",
     fontFamily,
   },
@@ -410,7 +594,7 @@ const styles = StyleSheet.create({
   conclusionText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 22,
+    lineHeight: 24,
     fontFamily,
   },
   sectionTitleLarge: {
@@ -461,7 +645,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: palette.clay,
   },
-  npcText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 20, fontFamily },
+  npcText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 22, fontFamily },
   playerBubble: {
     backgroundColor: palette.surfaceSoft,
     padding: space.sm,
@@ -469,19 +653,19 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: palette.blue,
   },
-  playerText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 20, fontFamily },
+  playerText: { color: palette.textSoft, fontSize: fontSize.body, lineHeight: 22, fontFamily },
   trapRow: { flexDirection: "row", marginTop: space.xs, gap: space.xs },
   trapTag: { color: palette.peach, fontSize: fontSize.body, fontWeight: fontWeight.semibold, fontFamily },
   analysisText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontFamily,
   },
   adviceText: {
     color: palette.green,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontStyle: "italic",
     fontFamily,
   },
@@ -497,7 +681,7 @@ const styles = StyleSheet.create({
   whyText: {
     color: palette.text,
     fontSize: fontSize.body,
-    lineHeight: 22,
+    lineHeight: 24,
     fontFamily,
   },
   tipBox: {
@@ -518,7 +702,7 @@ const styles = StyleSheet.create({
   tipText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontFamily,
   },
   dimRow: {
@@ -548,14 +732,28 @@ const styles = StyleSheet.create({
   altText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontFamily,
   },
   altRationale: {
     color: palette.blue,
     fontSize: fontSize.caption,
-    lineHeight: 16,
+    lineHeight: 18,
     marginTop: 2,
+    fontFamily,
+  },
+  degradedBanner: {
+    marginTop: space.sm,
+    backgroundColor: "rgba(214,138,110,0.14)",
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.clay,
+  },
+  degradedText: {
+    color: palette.clay,
+    fontSize: fontSize.body,
+    lineHeight: 20,
     fontFamily,
   },
   progressNote: {
@@ -569,7 +767,7 @@ const styles = StyleSheet.create({
   progressNoteText: {
     color: palette.blue,
     fontSize: fontSize.body,
-    lineHeight: 20,
+    lineHeight: 22,
     fontFamily,
   },
   emptyHint: {
@@ -577,6 +775,10 @@ const styles = StyleSheet.create({
     fontSize: fontSize.caption,
     fontStyle: "italic",
     fontFamily,
+    marginTop: space.xs,
+  },
+  emptyRetry: {
+    alignSelf: "flex-start",
     marginTop: space.xs,
   },
   completeBtn: {

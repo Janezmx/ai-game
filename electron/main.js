@@ -7,6 +7,21 @@ const isDev = !app.isPackaged;
 const BACKEND_PORT = 3009; // 保留但不再使用
 const FRONTEND_PORT = 3008;
 
+// 单实例锁：必须在 require('electron') 之后立刻调用
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // 直接退出整个进程，不走任何初始化
+  process.exit(0);
+}
+
+app.on("second-instance", () => {
+  // 有人尝试打开第二个实例，聚焦到已有窗口
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
 let mainWindow = null;
 let backendProcess = null;
 let frontendServer = null;
@@ -37,7 +52,7 @@ function openWindow(url) {
 
   mainWindow = new BrowserWindow({
     width: 420,
-    height: 780,
+    height: 1200,
     minWidth: 375,
     minHeight: 650,
     title: "清醒边界 - 守护你的心域",
@@ -49,8 +64,10 @@ function openWindow(url) {
 
   mainWindow.loadURL(url);
 
-  // 生产模式也自动打开控制台（调试用）
-  mainWindow.webContents.openDevTools({ mode: "bottom" });
+  // 生产模式不自动打开控制台，F12 可手动切换
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
 
   mainWindow.webContents.on("before-input-event", (_, input) => {
     if (input.key === "F12" || input.key === "f12") {

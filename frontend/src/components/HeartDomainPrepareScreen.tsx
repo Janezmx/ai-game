@@ -9,7 +9,7 @@ import {
   Dimensions,
   Modal,
 } from "react-native";
-import Svg, { Circle, G, Defs, LinearGradient, Stop } from "react-native-svg";
+import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { GestureHandlerRootView, PanGestureHandler, State, PanGestureHandlerGestureEvent } from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
@@ -22,7 +22,7 @@ import Animated, {
   FadeOut,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useGameStore } from "../store/gameStore";
+import { useGameStore, type Difficulty } from "../store/gameStore";
 import { ArtifactType, Artifact, GamePhase } from "@aigame/shared";
 import KnowledgeCard, { getLevelKnowledgePoint } from "./KnowledgeCard";
 import { palette, radius, space, fontSize, fontWeight, fontFamily, shadow } from "../theme";
@@ -34,15 +34,12 @@ const CENTER = SVG_SIZE / 2;
 // ==================== 心域可视化 ====================
 function HeartDomainSVG({
   shieldHealth,
-  fogDensity,
   activeArtifactType,
 }: {
   shieldHealth: number;
-  fogDensity: number;
   activeArtifactType: ArtifactType | null;
 }) {
   const shieldScale = 0.6 + (shieldHealth / 100) * 0.4;
-  const fogOpacity = 0.15 + (fogDensity / 100) * 0.6;
 
   return (
     <Svg width={SVG_SIZE} height={SVG_SIZE} viewBox={`0 0 100 100`}>
@@ -50,10 +47,6 @@ function HeartDomainSVG({
         <LinearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
           <Stop offset="0%" stopColor={palette.blue} stopOpacity={0.5} />
           <Stop offset="100%" stopColor={palette.primary} stopOpacity={0.3} />
-        </LinearGradient>
-        <LinearGradient id="fogGrad" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0%" stopColor={palette.fog} stopOpacity={fogOpacity} />
-          <Stop offset="100%" stopColor={palette.fog} stopOpacity={fogOpacity * 0.5} />
         </LinearGradient>
       </Defs>
 
@@ -86,10 +79,6 @@ function HeartDomainSVG({
           strokeOpacity={0.6}
         />
       )}
-
-      {/* 迷雾覆盖（已隐藏，效果不明显，状态逻辑保留）
-      <Circle cx={50} cy={50} r={48} fill="url(#fogGrad)" />
-      */}
     </Svg>
   );
 }
@@ -132,13 +121,6 @@ function ArtifactCard({
 
 // ==================== 进入对话前的概念介绍 ====================
 const CONCEPTS: { id: string; icon: string; title: string; desc: string }[] = [
-  // 迷雾密度介绍（已隐藏，效果不明显，状态逻辑保留）
-  // {
-  //   id: "fog",
-  //   icon: "🌫️",
-  //   title: "迷雾密度",
-  //   desc: "代表操控话术带来的困惑。迷雾越浓，越难看清对方套路、护盾也越脆弱；有效应对和法器可驱散它。",
-  // },
   {
     id: "artifact",
     icon: "🛡️",
@@ -160,8 +142,9 @@ export default function HeartDomainPrepareScreen({
   const {
     sanctuary,
     setPhase,
+    difficulty,
+    setDifficulty,
     setShieldHealth,
-    setFogDensity,
     equipArtifact,
     unequipArtifact,
     currentKnowledgePoint,
@@ -172,6 +155,7 @@ export default function HeartDomainPrepareScreen({
   const knowledgePoint = currentKnowledgePoint || getLevelKnowledgePoint(currentLevel);
 
   const [showArtifactModal, setShowArtifactModal] = useState(false);
+  const [showDifficultyModal, setShowDifficultyModal] = useState(false);
   const [activeArtifactType, setActiveArtifactType] = useState<ArtifactType | null>(null);
 
   // 装备法器
@@ -189,11 +173,21 @@ export default function HeartDomainPrepareScreen({
     [unequipArtifact]
   );
 
-  // 进入下一阶段
+  // 点击"开始对话入侵"：先弹难度选择框，选定后才真正进入对话界面
   const handleStartBattle = useCallback(() => {
-    setPhase(GamePhase.DialogueBattle);
-    onComplete?.();
-  }, [setPhase, onComplete]);
+    setShowDifficultyModal(true);
+  }, []);
+
+  // 选择难度并进入对话界面（每关开始前都会弹框选择一次）
+  const handleChooseDifficulty = useCallback(
+    (d: Difficulty) => {
+      setDifficulty(d);
+      setShowDifficultyModal(false);
+      setPhase(GamePhase.DialogueBattle);
+      onComplete?.();
+    },
+    [setDifficulty, setPhase, onComplete]
+  );
 
   return (
     <GestureHandlerRootView style={[styles.container, { paddingTop: insets.top }]}>
@@ -229,14 +223,14 @@ export default function HeartDomainPrepareScreen({
 
 
 
-        {/* 心域可视化 */}
+        {/* 心域可视化（已隐藏，如需恢复取消下方注释）
         <View style={styles.domainContainer}>
           <HeartDomainSVG
             shieldHealth={sanctuary.shieldHealth}
-            fogDensity={sanctuary.fogDensity}
             activeArtifactType={activeArtifactType}
           />
         </View>
+          */}
 
         {/* 状态信息 */}
         <View style={styles.statsRow}>
@@ -244,12 +238,6 @@ export default function HeartDomainPrepareScreen({
             <Text style={styles.statValue}>{sanctuary.shieldHealth}</Text>
             <Text style={styles.statLabel}>护盾强度</Text>
           </View>
-          {/* 迷雾密度统计（已隐藏，效果不明显，状态逻辑保留）
-          <View style={styles.statBox}>
-            <Text style={styles.statValue}>{sanctuary.fogDensity}</Text>
-            <Text style={styles.statLabel}>迷雾密度</Text>
-          </View>
-          */}
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.equippedArtifacts.length}</Text>
             <Text style={styles.statLabel}>法器装备</Text>
@@ -314,6 +302,47 @@ export default function HeartDomainPrepareScreen({
           </View>
         </View>
       </Modal>
+
+      {/* 难度选择 Modal：每一关开始前选择，选完立即进入对话界面 */}
+      <Modal
+        visible={showDifficultyModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDifficultyModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>🎯 选择挑战难度</Text>
+            <Text style={styles.modalHint}>
+              难度决定本关法器的冷却规则，选择后立即开始对话
+            </Text>
+            <TouchableOpacity
+              style={[
+                styles.difficultyCard,
+                difficulty === "easy" && styles.difficultyCardCurrent,
+              ]}
+              onPress={() => handleChooseDifficulty("easy")}
+            >
+              <Text style={styles.difficultyTitle}>☀️ 简单模式</Text>
+              <Text style={styles.difficultyDesc}>
+                法器无冷却：每回合都能自由使用法器，先熟悉每种操控手法，轻松体验完整剧情。
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.difficultyCard,
+                difficulty === "hard" && styles.difficultyCardCurrent,
+              ]}
+              onPress={() => handleChooseDifficulty("hard")}
+            >
+              <Text style={styles.difficultyTitle}>🌩️ 困难模式</Text>
+              <Text style={styles.difficultyDesc}>
+                法器冷却 3 回合：需要策略性地选择释放时机，守卫你的心理边界（与原规则一致）。
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </GestureHandlerRootView>
   );
 }
@@ -321,8 +350,7 @@ export default function HeartDomainPrepareScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: palette.bg,
-    maxWidth: 500,
+    backgroundColor: palette.bg,
     width: "100%",
     alignSelf: "center",
   },
@@ -345,7 +373,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.caption,
     textAlign: "center",
     marginTop: 6,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   knowledgeIntro: {
     marginBottom: space.lg,
@@ -379,7 +407,7 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
   },
   conceptIcon: {
-    fontSize: 24,
+    fontSize: 26,
     marginRight: 12,
     marginTop: 2,
   },
@@ -395,8 +423,8 @@ const styles = StyleSheet.create({
   },
   conceptDesc: {
     color: palette.textSoft,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
   },
   domainContainer: {
     alignItems: "center",
@@ -412,13 +440,13 @@ const styles = StyleSheet.create({
   },
   statValue: {
     color: palette.text,
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: fontWeight.bold,
     fontFamily,
   },
   statLabel: {
     color: palette.textSoft,
-    fontSize: 11,
+    fontSize: 13,
     marginTop: 2,
   },
   amuletSection: {
@@ -433,7 +461,7 @@ const styles = StyleSheet.create({
   },
   sectionHint: {
     color: palette.textSoft,
-    fontSize: 11,
+    fontSize: 13,
     marginBottom: space.sm,
   },
   amuletInput: {
@@ -462,12 +490,12 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
   },
   actionIcon: {
-    fontSize: 28,
+    fontSize: 30,
     marginBottom: 6,
   },
   actionLabel: {
     color: palette.textSoft,
-    fontSize: 13,
+    fontSize: 15,
   },
   startBtn: {
     backgroundColor: palette.primary,
@@ -509,7 +537,7 @@ const styles = StyleSheet.create({
   },
   modalHint: {
     color: palette.textSoft,
-    fontSize: 12,
+    fontSize: 14,
     marginBottom: space.md,
   },
   emptyText: {
@@ -530,6 +558,31 @@ const styles = StyleSheet.create({
     fontSize: fontSize.body,
     fontWeight: fontWeight.semibold,
   },
+  // ===== 难度选择卡片 =====
+  difficultyCard: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginBottom: space.sm,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  difficultyCardCurrent: {
+    borderColor: palette.primary,
+    backgroundColor: palette.surface,
+  },
+  difficultyTitle: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.bold,
+    fontFamily,
+    marginBottom: 4,
+  },
+  difficultyDesc: {
+    color: palette.textSoft,
+    fontSize: 14,
+    lineHeight: 20,
+  },
   // ===== 法器卡片 =====
   artifactCard: {
     flexDirection: "row",
@@ -546,7 +599,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surfaceSoft,
   },
   artifactIcon: {
-    fontSize: 28,
+    fontSize: 30,
     marginRight: 12,
     width: 32,
     textAlign: "center",
@@ -561,12 +614,12 @@ const styles = StyleSheet.create({
   },
   artifactDesc: {
     color: palette.textSoft,
-    fontSize: 11,
+    fontSize: 13,
     marginTop: 2,
   },
   equippedBadge: {
     color: palette.primaryDark,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: fontWeight.semibold,
   },
 });

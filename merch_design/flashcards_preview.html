@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>「清醒边界」五关知识闪卡 · 全部正反面版式</title>
+<style>
+:root{
+--paper:#FBF5EC;--surface:#FFFDF9;--ink:#4A4039;--soft:#8A7B6E;--faint:#B6A89B;
+--border:#ECDFD0;--border2:#E0CDB6;--green:#88A878;
+--c1:#A7C4D4;--c2:#E0A899;--c3:#E0B084;--c4:#8FA3B0;--c5:#AE9FB3;
+--s1:#E4EDF2;--s2:#F8E8E1;--s3:#F8EADF;--s4:#E3E9ED;--s5:#EEE9F0;}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:linear-gradient(160deg,#F6ECDF,#EFE0CE);color:var(--ink);padding:40px 24px 70px}
+.page{max-width:1180px;margin:0 auto}
+h1{font-size:26px;letter-spacing:1px}
+.sub{margin-top:8px;color:var(--soft);font-size:14px;line-height:1.8}
+/* 每关一组：正面 ｜ 背面 */
+.grp{display:flex;justify-content:center;align-items:flex-start;gap:44px;flex-wrap:wrap;margin-top:36px;background:rgba(255,253,249,.45);border:1px solid var(--border);border-radius:22px;padding:24px 16px 30px}
+.grp-h{width:100%;display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:4px;color:var(--soft);font-size:13px;font-weight:700;letter-spacing:3px}
+.grp-h i{font-style:normal;color:var(--cc)}
+.grp-h .bar{height:1px;width:70px;background:var(--border2)}
+.col{display:flex;flex-direction:column;align-items:center;width:324px}
+.col-label{font-size:12px;font-weight:600;color:var(--soft);letter-spacing:2px;background:rgba(255,253,249,.9);border:1px solid var(--border);padding:5px 12px;border-radius:999px;margin-bottom:16px}
+/* 卡基 */
+.card{width:324px;min-height:492px;border-radius:14px;position:relative;overflow:hidden;background:var(--surface);box-shadow:0 16px 32px rgba(201,169,140,.30),0 3px 8px rgba(201,169,140,.18)}
+.card::after{content:"";position:absolute;inset:0;border:1px solid var(--border2);border-radius:14px;pointer-events:none}
+/* 正面 */
+.front{background:linear-gradient(180deg,var(--paper),var(--surface));display:flex;flex-direction:column}
+.band{position:absolute;top:0;left:0;right:0;height:9px;background:var(--cc)}
+.lv{padding:20px 20px 0;display:flex;justify-content:space-between;align-items:center}
+.chip{font-size:11px;font-weight:600;color:var(--soft);background:#fff;border:1px solid var(--border);border-radius:999px;padding:3px 10px;letter-spacing:1px}
+.chip b{color:var(--cc)}
+.glyph{display:flex;justify-content:center;padding-top:34px}
+.halo{width:132px;height:132px;border-radius:50%;background:var(--cs);display:flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 2px var(--cc),inset 0 0 28px rgba(255,255,255,.65)}
+.halo span{font-size:60px;line-height:1}
+.title{text-align:center;margin-top:24px;font-size:30px;font-weight:800;letter-spacing:2px;line-height:1.35}
+.subt{text-align:center;margin-top:8px;font-size:12.5px;color:var(--soft);letter-spacing:4px}
+.quote{margin:auto 26px 16px;background:var(--cs);border:1px dashed var(--cc);border-radius:12px;padding:13px;text-align:center}
+.quote .q{font-size:16.5px;font-weight:700;line-height:1.7;letter-spacing:1px}
+.brand{flex:none;text-align:center;font-size:11px;color:var(--faint);letter-spacing:3px;padding-bottom:13px}
+/* 背面 */
+.back{padding:20px 22px 16px;display:flex;flex-direction:column}
+.bh{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.bh .name{font-size:18px;font-weight:800;letter-spacing:1px}
+.bh .tag{font-size:10px;color:var(--faint);border:1px solid var(--border);padding:2px 8px;border-radius:999px}
+.sec{margin-bottom:7px}
+.sl{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--soft);margin-bottom:3px}
+.def{font-size:12px;line-height:1.65;background:#FBF7EF;border:1px solid var(--border);border-left:3px solid var(--green);border-radius:8px;padding:7px 10px}
+ul{list-style:none}
+.sig li{position:relative;padding-left:12px;font-size:12px;line-height:1.6;color:var(--soft)}
+.sig li::before{content:"▸";position:absolute;left:0;color:var(--cc);font-weight:800}
+.resp li{position:relative;padding-left:15px;font-size:12px;line-height:1.55;color:var(--soft)}
+.resp li::before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800}
+.story{font-size:11.5px;line-height:1.6;color:var(--soft);background:#FBF7EF;border-radius:8px;padding:6px 10px}
+.foot{margin-top:auto;border-top:1px dashed var(--border2);padding-top:8px;display:flex;justify-content:space-between;align-items:center;gap:6px}
+.fx{font-size:11px;color:var(--soft)} .fx b{color:var(--ink)}
+.ach{font-size:9px;text-align:right;color:var(--faint);line-height:1.6;letter-spacing:1px}
+.badge{display:inline-block;background:var(--cs);border:1px solid var(--cc);font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;color:var(--ink)}
+.note{max-width:900px;margin:38px auto 0;background:rgba(255,253,249,.85);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;line-height:1.9;color:var(--soft)}
+.note b{color:var(--ink)}
+/* ---- 打印模式：每卡 88x128mm @300dpi = 1039x1512px ---- */
+body.print{background:#fff;padding:0}
+body.print .page h1,body.print .page>.sub,body.print .page>.note{display:none}
+body.print #cards{display:none}
+body.print .card{border-radius:0!important;box-shadow:none!important;min-height:492px!important;height:492px!important}
+.printslot{position:relative;width:1039px;height:1512px;overflow:hidden;background:#fff}
+.pw{position:absolute;left:0;top:0}
+</style>
+</head>
+<body>
+<div class="page">
+<h1>「清醒边界」五关知识闪卡 · 全部正反面版式</h1>
+<div class="sub">88 × 128mm ｜ 400gsm 触感哑膜 ｜ 一套 5 知识卡 + 1 引导卡 + 1 宣言卡 · 正反内容全部取自游戏内 <b>LEVELS / LEVEL_KNOWLEDGE / ALL_BADGES</b> 原版数据</div>
+<div id="cards"></div>
+<div class="note">
+<b>版式说明：</b>正面不放说教内容，只做「符号 + 名称 + 一句可对自己说的话」，翻到即默念，是情绪提示而非教材；背面完整复刻游戏内 <i>KnowledgeCard</i> 的四段式（定义→识别信号→健康应对→真实案例），让玩家有「游戏里见过」的熟悉感。底部法器按克制关系推荐：真言镜双倍克「记忆否认 / 事实扭曲」、心盾双倍克「感受否定 / 情感绑架」、破谎矛对已识别陷阱 1.5 倍。成就徽章位可做成<b>银刮层</b>——未通关时盖住，通关后用游戏内解锁码刮开，让周边跟着游戏进度走。
+</div>
+</div>
+<script>
+/* 数据全部取自 shared/src/index.ts LEVELS、frontend KnowledgeCard.tsx LEVEL_KNOWLEDGE、ALL_BADGES 原版 */
+const CARDS = [
+{
+n:1,no:"第一关 · 共五关",scene:"亲密关系",v:"--cc:var(--c1);--cs:var(--s1)",
+title:"煤气灯效应",subt:"否定感受 · 认知侵蚀",emoji:"💡",
+quote:"你记得的，就是真的。",
+def:"操控者通过否认你的记忆、感受和事实，让你怀疑自己的判断力，逐渐失去对现实的掌控。",
+sig:["对方常说「你太敏感了」「你记错了」","你的真实感受被说成是「想太多」","事情发生后对方改口否认说过的话","你开始频繁自我怀疑、反复查证记忆"],
+res:["我可以确认自己的感受是真实的，不需要你来证明","我记得很清楚，我们当时说的是……","如果你不记得，我们可以一起看聊天记录"],
+story:"小柔的男友总在她提出不满时说「你又敏感了」。久而久之她不敢表达，直到朋友提醒：你的感受没有错，错的是否认。",
+fx:"🔍真言镜 · 🛡️心盾",badge:"💡 煤气灯识破者"},
+{
+n:2,no:"第二关 · 共五关",scene:"职场",v:"--cc:var(--c2);--cs:var(--s2)",
+title:"职场PUA",subt:"能力贬低 · 价值否定",emoji:"💼",
+quote:"我的价值，不由一次否定定义。",
+def:"上级或同事以「为你好」之名持续贬低你的能力与价值，瓦解自信，让你安于被压榨。",
+sig:["拿你和别人比较来否定你","把正常失误放大成「能力不行」","用职位权威堵住你的反驳","让你觉得离开这里就找不到更好的"],
+res:["这是我基于事实的判断，我们可以就事论事","我希望得到具体可改进的反馈，而不是笼统否定","我的价值不取决于一次评价"],
+story:"阿杰的方案被当众说成「毫无逻辑」，同事私下却觉得很好。他后来学会区分「批评」与「打压」。",
+fx:"🛡️心盾 · 🔱破谎矛",badge:"💼 PUA抵抗者"},
+{
+n:3,no:"第三关 · 共五关",scene:"家庭",v:"--cc:var(--c3);--cs:var(--s3)",
+title:"亲情绑架",subt:"内疚诱导 · 牺牲叙事",emoji:"👨‍👩‍👧",
+quote:"爱，不等于交出边界。",
+def:"家人以爱、牺牲与孝道为名，用内疚感迫使你服从，边界被「为你好」悄悄侵蚀。",
+sig:["常说「我为你付出这么多」","不听话就等于「不孝」「不懂事」","用健康或情绪要挟你的选择","拿你与「别人家孩子」比较"],
+res:["我理解你的关心，但这是我自己的人生决定","爱不等于要我放弃边界","我可以关心你，也可以坚持自己的选择"],
+story:"晓雯被父母以「我们白养你了」逼迫考公。她最终明白：孝顺不是丧失自我，而是彼此尊重。",
+fx:"🛡️心盾",badge:"👨‍👩‍👧 亲情边界"},
+{
+n:4,no:"第四关 · 共五关",scene:"匿名网络",v:"--cc:var(--c4);--cs:var(--s4)",
+title:"匿名网络攻击",subt:"群体极化 · 去人格化",emoji:"👾",
+quote:"我无须向网暴自证。",
+def:"匿名的群体以标签、谣言与围攻对你进行去人格化攻击，利用从众压力制造孤立。",
+sig:["大量陌生账号同时攻击你","断章取义的截图被当成「实锤」","你被贴上负面标签难以撕掉","反对的声音被音量淹没"],
+res:["这是断章取义，我可以提供完整上下文","标签不能定义我，我不为网暴自证","我会保护隐私，必要时截图举报"],
+story:"一条吐槽被截图传播后，小雨遭群嘲。她学会：面对网暴，先保存证据，再冷处理，不陷入对线。",
+fx:"🔱破谎矛 · 🔍真言镜",badge:"👾 网络守卫"},
+{
+n:5,no:"第五关 · 共五关",scene:"偏见场域",v:"--cc:var(--c5);--cs:var(--s5)",
+title:"隐性歧视",subt:"微侵犯 · 预设质疑",emoji:"🎭",
+quote:"我无须自证，只用结果说话。",
+def:"以「善意」「专业」包装的微妙偏见，用预设与双重标准悄悄低估你的能力。",
+sig:["用「你真的适合吗」式关怀质疑","标准对你更严苛、对别人更宽松","把你的成就归因于运气","你总被要求额外「证明自己」"],
+res:["我用作品和结果说话，欢迎就事论事","请用同一把尺子衡量所有人","我的能力不需要先证伪"],
+story:"面试中，琳被反复追问「如何平衡家庭」，而男候选人没有。她意识到：这是微侵犯，不是关心。",
+fx:"🔍真言镜",badge:"🎭 偏见破除者"},
+];
+const NUM = ["一","二","三","四","五"];
+const CN = CARDS.map(c=>c.n).join("、");
+const html = CARDS.map(c=>{
+/* 铭言单行适配：内容区宽约 246px，按「总字数×(字号+1px)」反推最大字号 */
+const _qn=c.quote.length+2;
+const _qpx=Math.min(16.5,Math.floor((242/_qn-1)*2)/2);
+return `
+<div class="grp" style="${c.v}">
+  <div class="grp-h"><span class="bar"></span><i>第 ${NUM[c.n-1]} 关 · ${c.title}</i><span class="bar"></span></div>
+  <div class="col">
+    <div class="col-label">正面 · 视觉触发面</div>
+    <div class="card front">
+      <div class="band"></div>
+      <div class="lv"><span class="chip">${c.no}</span><span class="chip"><b>${c.scene}</b></span></div>
+      <div class="glyph"><div class="halo"><span>${c.emoji}</span></div></div>
+      <div class="title" style="${c.title.length>4?'font-size:25px':''}">${c.title}</div>
+      <div class="subt">${c.subt}</div>
+      <div class="quote"><div class="q" style="white-space:nowrap;font-size:${_qpx}px">「${c.quote}」</div></div>
+      <div class="brand">✦ 守护你的心域 · 清醒边界 ✦</div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="col-label">背面 · 学习复盘面</div>
+    <div class="card back">
+      <div class="band" style="opacity:.5"></div>
+      <div class="bh"><span class="name">${c.title}</span><span class="tag">知识卡 ${c.n} / 5</span></div>
+      <div class="sec"><div class="sl">📖 它是什么</div><div class="def">${c.def}</div></div>
+      <div class="sec"><div class="sl">☁️ 识别信号 · 出现即警惕</div><ul class="sig">
+        ${c.sig.map(s=>`<li>${s}</li>`).join("")}</ul></div>
+      <div class="sec"><div class="sl">✓ 健康应对 · 说给自己听</div><ul class="resp">
+        ${c.res.map(r=>`<li>${r}</li>`).join("")}</ul></div>
+      <div class="sec"><div class="sl">📝 真实案例</div><div class="story">${c.story}</div></div>
+      <div class="foot">
+        <div class="fx">推荐法器 <b>${c.fx}</b></div>
+        <div class="ach"><span class="badge">${c.badge}</span></div>
+      </div>
+    </div>
+  </div>
+</div>`;}).join("");
+document.getElementById("cards").innerHTML = html;
+
+/* 打印模式：把每张卡放入 1039x1512 画布（88x128mm @300dpi），非等比适配整版
+   --cc/--cs 颜色变量定义在外层 .grp 上，克隆进独立画布后一并带上，否则 var(--cc/--cs) 底色会失效
+   卡片在 .print 下被固定为 324x492px，直接用已知尺寸换算 scale，同步设置，避免截图早于动画帧的竞态 */
+if(/[?&]print/.test(location.search)){
+  document.body.classList.add("print");
+  const list = document.createElement("div");
+  list.id = "printlist";
+  document.querySelector(".page").appendChild(list);
+  const PW = 1039, PH = 1512, CW = 324, CH = 492;
+  const SX = PW/CW, SY = PH/CH;
+  CARDS.forEach(c=>{
+    ["front","back"].forEach(side=>{
+      const src = document.querySelector("#cards .grp:nth-of-type("+c.n+") .card."+side);
+      const grp = src.closest(".grp");
+      const slot = document.createElement("div");
+      slot.className = "printslot";
+      const wrap = document.createElement("div");
+      wrap.className = "pw";
+      if(grp && grp.getAttribute("style")) wrap.setAttribute("style",grp.getAttribute("style"));
+      const card = src.cloneNode(true);
+      wrap.appendChild(card);
+      slot.appendChild(wrap);
+      list.appendChild(slot);
+      wrap.style.width = CW+"px";
+      card.style.transformOrigin = "top left";
+      card.style.transform = "scale("+SX+","+SY+")";
+    });
+  });
+}
+</script>
+</body>
+</html>

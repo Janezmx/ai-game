@@ -1,0 +1,271 @@
+{
+  "id": "1789026938218-1",
+  "version": 1,
+  "level": 1,
+  "levelTitle": "煤气灯效应",
+  "timestamp": 1789026938218,
+  "victory": false,
+  "avgScore": 51,
+  "dimensions": {
+    "boundaryAwareness": 55,
+    "emotionalStability": 61,
+    "cognitiveClarity": 56,
+    "assertiveResponse": 30
+  },
+  "dimensionHistory": [
+    {
+      "boundaryAwareness": 65,
+      "emotionalStability": 70,
+      "cognitiveClarity": 68,
+      "assertiveResponse": 40
+    },
+    {
+      "boundaryAwareness": 62,
+      "emotionalStability": 66,
+      "cognitiveClarity": 64,
+      "assertiveResponse": 42
+    },
+    {
+      "boundaryAwareness": 55,
+      "emotionalStability": 62,
+      "cognitiveClarity": 56,
+      "assertiveResponse": 28
+    },
+    {
+      "boundaryAwareness": 50,
+      "emotionalStability": 55,
+      "cognitiveClarity": 48,
+      "assertiveResponse": 22
+    },
+    {
+      "boundaryAwareness": 45,
+      "emotionalStability": 50,
+      "cognitiveClarity": 42,
+      "assertiveResponse": 20
+    }
+  ],
+  "rounds": [
+    {
+      "npcMessage": {
+        "id": "npc-eval-1789026848763",
+        "role": "npc",
+        "content": "宝贝，你怎么用这种眼神看我？那条项链昨天不是你自己放进梳妆台第二层的吗，你还说「放这儿最安全」。我从来没碰过你的首饰盒，你是不是最近太累了，又把事情记混了？",
+        "timestamp": 1789026848763,
+        "trapType": "煤气灯效应",
+        "playerStatus": "effective"
+      },
+      "playerMessage": {
+        "role": "player",
+        "content": "哦",
+        "timestamp": 1789026838083,
+        "id": "msg-1789026838083-3lqq"
+      },
+      "assessment": {
+        "trapType": "煤气灯效应",
+        "trapAnalysis": "用“你记混了”“我从来没碰过”直接否定对方记忆，诱导玩家怀疑自己的认知。",
+        "playerStatus": "effective",
+        "dimensions": {
+          "boundaryAwareness": 65,
+          "emotionalStability": 70,
+          "cognitiveClarity": 68,
+          "assertiveResponse": 40
+        },
+        "assessment": "回应过于简短，虽未落入争辩，但也没守住沟通边界，容易让对方继续加码。",
+        "whyNote": "这句在暗示“问题出在你的脑子，不在我”，你会被诱导去反复查证记忆、自证清白。",
+        "identificationTip": "一看到对方总说事实和你记忆相反，先别急着解释，问自己：他在把你往“记错”上推吗？",
+        "alternatives": [
+          {
+            "text": "我没有记混，我确定最后是在你手里。",
+            "rationale": "直接、稳定地陈述自己的记忆，不接“找抽屉”的争辩框架。"
+          },
+          {
+            "text": "你刚才还在问我看你眼神，现在却说我记错，我们先别急着翻，把话说清楚。",
+            "rationale": "点出对方逻辑跳跃，保持对话焦点，不进入配合翻找的被动状态。"
+          },
+          {
+            "text": "我不打算靠你陪着我找来自证，我要的是你直接回答有没有动过。",
+            "rationale": "明确拒绝被带进自证循环，把问题拉回对方行为。"
+          }
+        ],
+        "progressNote": "首轮评估",
+        "conversationEnded": false
+      }
+    },
+    {
+      "npcMessage": {
+        "id": "npc-eval-1789026865425",
+        "role": "npc",
+        "content": "就一个「哦」啊？我是怕你难过才没跟你计较，结果你连话都懒得跟我说了。要不这样，你再好好想想，是不是前天洗澡前顺手一放就忘了，我陪你把每个抽屉都翻一遍，好不好？",
+        "timestamp": 1789026865425,
+        "trapType": "煤气灯效应",
+        "playerStatus": "shaken"
+      },
+      "playerMessage": {
+        "role": "player",
+        "content": "好的",
+        "timestamp": 1789026855586,
+        "id": "msg-1789026855586-ohbs"
+      },
+      "assessment": {
+        "trapType": "煤气灯效应",
+        "trapAnalysis": "用“你变冷淡了”把话题从项链丢失转移到对感情的怀疑上，把玩家的沉默扭曲成对关系的否定，从而制造愧疚。",
+        "playerStatus": "shaken",
+        "dimensions": {
+          "boundaryAwareness": 62,
+          "emotionalStability": 66,
+          "cognitiveClarity": 64,
+          "assertiveResponse": 42
+        },
+        "assessment": "玩家简单顺从，未接住情感绑架，仍停留在被牵着走的节奏里。",
+        "whyNote": "这句话想让你因为冷淡表现而自责，从而忽略项链丢失本身该由谁负责。",
+        "identificationTip": "当对方把你的情绪反应拿来审判，而不是回应具体事实时，就是情感操控。",
+        "alternatives": [
+          {
+            "text": "我不是冷淡，只是想先把项链的事说清楚。",
+            "rationale": "把话题拉回事实，用平静澄清代替防御性解释。"
+          },
+          {
+            "text": "你把我丢东西的反应当成感情变淡的证据，这让我有点不舒服。",
+            "rationale": "直接点破对方混淆两件事，保护自己的感受不被挪用。"
+          }
+        ],
+        "progressNote": "与上一轮相比，边界意识、情绪稳定和认知清晰略有下降，坚定回应仍偏低，需加强直接澄清事实。"
+      }
+    },
+    {
+      "npcMessage": {
+        "id": "npc-eval-1789026903127",
+        "role": "npc",
+        "content": "你这一声「好」，比刚才那个「哦」还让我心里发凉。宝贝，以前你丢了东西第一个扑过来找我，现在倒好，东西丢了也能这么冷静地看着我，我有时候真忍不住想，到底是哪里变了，是你心里那杆秤悄悄把我挪出去了，还是我成了那个你想丢就先丢的人？",
+        "timestamp": 1789026903127,
+        "trapType": "煤气灯效应 + 情感绑架",
+        "playerStatus": "shaken"
+      },
+      "playerMessage": {
+        "role": "player",
+        "content": "没有",
+        "timestamp": 1789026890362,
+        "id": "msg-1789026890362-imbf"
+      },
+      "assessment": {
+        "trapType": "煤气灯效应 + 情感绑架",
+        "trapAnalysis": "先说「你眼睛躲开了」否定你的坦诚，再把怀疑说成是你对他的伤害，最后又用「再去翻一遍」把你拉回他的叙事里，让你怀疑自己的判断。",
+        "playerStatus": "shaken",
+        "dimensions": {
+          "boundaryAwareness": 55,
+          "emotionalStability": 62,
+          "cognitiveClarity": 56,
+          "assertiveResponse": 28
+        },
+        "assessment": "「没有」两个字太单薄，既没接住他「眼睛躲开」的暗示，也没点破他偷换的「怀疑=伤害」，反而让沉默默认了他的版本。",
+        "whyNote": "他在把你的正常反击包装成对他的伤害——你怀疑失物本是合理的，他却引导你为「怀疑他」而内疚，从而不再追项链的事。",
+        "identificationTip": "只要对方用「你眼神/你语气暴露了你」来替你定义内心，就是在替你改记忆，先别接这顶帽子。",
+        "alternatives": [
+          {
+            "text": "我眼神怎样不重要，项链在哪才重要。你陪我一起翻，我们看结果。",
+            "rationale": "把焦点拉回事实，拒绝被他的「读心」带节奏。"
+          },
+          {
+            "text": "我怀疑是正常的，东西丢了我会查，不针对谁，也不需要你替我心疼。",
+            "rationale": "守住合理边界，同时拒绝他强塞的情绪包袱。"
+          },
+          {
+            "text": "你说你没碰、我说我放进去了，那就把梳妆台翻一遍，谁对谁错用事实说话。",
+            "rationale": "用共同验证代替争吵，堵住他继续扭曲记忆的空间。"
+          }
+        ],
+        "progressNote": "相比上一轮，边界意识62→55、情绪稳定66→62、认知清晰64→56、坚定回应42→28，回应更被动，防线在收缩。",
+        "conversationEnded": false
+      }
+    },
+    {
+      "npcMessage": {
+        "id": "npc-eval-1789026917306",
+        "role": "npc",
+        "content": "你说没有，可你眼睛先躲开了我。宝贝，我真不是要跟你争那条项链，我是心疼你——东西丢了，你第一个怀疑的却是我，我连解释一句都像在狡辩。要不这样，你再去梳妆台第二层仔细翻一遍，说不定它一直就在那儿，只是你刚才扫了一眼没看清。",
+        "timestamp": 1789026917306,
+        "trapType": "情感绑架 + 角色反转",
+        "playerStatus": "shaken"
+      },
+      "playerMessage": {
+        "role": "player",
+        "content": "哦哦、",
+        "timestamp": 1789026906521,
+        "id": "msg-1789026906521-rtfd"
+      },
+      "assessment": {
+        "trapType": "情感绑架 + 角色反转",
+        "trapAnalysis": "NPC 用「你把我当贼」把矛头调转——丢东西的一方反成了加害者，逼你自证清白，从而掩盖「我到底有没有碰首饰盒」这个真正该被追问的问题。",
+        "playerStatus": "shaken",
+        "dimensions": {
+          "boundaryAwareness": 50,
+          "emotionalStability": 55,
+          "cognitiveClarity": 48,
+          "assertiveResponse": 22
+        },
+        "assessment": "「哦哦、」等于默认接过了对方递来的愧疚，既没澄清项链的事，也没挡住「你是想怪我」这顶帽子，情绪上被牵着走，气势进一步下滑。",
+        "whyNote": "这句话的真正目的是把「项链不见了」偷换成「你凭什么怀疑我」，让你忙着解释自己的态度，而忘了追问事情的真相，最后反而觉得是自己不对。",
+        "identificationTip": "一旦对方不谈事情本身、只反复质疑「你为什么这么想我」，就是在转移战场，别跟着解释态度，回到事实。",
+        "alternatives": [
+          {
+            "text": "我没有说你是贼。我现在只想知道，你到底有没有动过梳妆台第二层，你正面回答我。",
+            "rationale": "拒绝接住「你在怪罪我」这个帽子，把话题钉回具体事实，逼对方给出明确答复。"
+          },
+          {
+            "text": "项链在哪我现在先放一边，但你别替我的感受下结论——我什么反应是我的事。",
+            "rationale": "守住自己的情绪归属权，打断对方替你定义感受的操控链条。"
+          }
+        ],
+        "progressNote": "相比上一轮（边界意识55、情绪稳定62、认知清晰56、坚定回应28），四项均有下降：坚定回应由28降到22，认知清晰由56降到48，说明你正被拖入自证与沉默。",
+        "conversationEnded": false
+      }
+    },
+    {
+      "npcMessage": {
+        "id": "npc-eval-1789026936780",
+        "role": "npc",
+        "content": "你连着两个「哦」，像在把我往外推。我陪你翻也愿意，替你找也愿意，可你至少得让我知道，你到底是想要那条项链，还是想要一个能怪罪的人。宝贝，我把话放这儿——翻出来是我记错了，我认；可要是它一直都好好躺在第二层，那你得跟我说清楚，为什么第一反应是把我当成贼。",
+        "timestamp": 1789026936780,
+        "trapType": "煤气灯效应",
+        "playerStatus": "shaken"
+      },
+      "playerMessage": {
+        "role": "player",
+        "content": "对不起",
+        "timestamp": 1789026923233,
+        "id": "msg-1789026923233-7om2"
+      },
+      "assessment": {
+        "trapType": "煤气灯效应",
+        "trapAnalysis": "NPC把丢失项链的责任悄悄转移到玩家怀疑他的情绪上，想让玩家因内疚而不再追问事实。",
+        "playerStatus": "shaken",
+        "dimensions": {
+          "boundaryAwareness": 45,
+          "emotionalStability": 50,
+          "cognitiveClarity": 42,
+          "assertiveResponse": 20
+        },
+        "assessment": "玩家直接道歉，等于接下了NPC甩来的愧疚包袱，却未对事实和自身感受做任何澄清或坚持。",
+        "whyNote": "这句在乎的是你对他的态度，而不是项链在哪儿。它想让你觉得怀疑他才是错，从而不再查证事实。",
+        "identificationTip": "听到“你居然怀疑我”时先问：那东西到底在哪儿？别让情绪替换了事实。",
+        "alternatives": [
+          {
+            "text": "我没有把你当贼，我只是想先确认项链放哪儿了。",
+            "rationale": "澄清动机而不接愧疚，把对话拉回事实本身。"
+          },
+          {
+            "text": "现在一起打开第二层看看，找到再说其他的。",
+            "rationale": "用具体行动验证事实，避免继续被情绪绕开。"
+          },
+          {
+            "text": "你一直说我记混了，可我也想听你回忆一下昨天具体看到什么。",
+            "rationale": "把模糊的“为你委屈”转成双方对事实的共同梳理。"
+          }
+        ],
+        "progressNote": "相比上一轮，边界意识 50→45、情绪稳定 55→50、认知清晰 48→42、坚定回应 22→20，整体被带偏加深。",
+        "conversationEnded": false
+      }
+    }
+  ],
+  "savedAt": 1789026961460
+}

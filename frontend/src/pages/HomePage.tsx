@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal } from "react-native";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { LEVELS } from "@aigame/shared";
@@ -15,6 +15,7 @@ export default function HomePage() {
   const setCurrentLevel = useGameStore((s) => s.setCurrentLevel);
 
   const [showLevelPicker, setShowLevelPicker] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const masteredCount = masteredKnowledgePointIds.length;
   const totalCount = 5;
@@ -140,6 +141,41 @@ export default function HomePage() {
         >
           <Text style={styles.startButtonText}>📊 成长记录</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.resetButton}
+          onPress={() => setShowResetConfirm(true)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.resetButtonText}>🔄 重置数据</Text>
+        </TouchableOpacity>
+
+        {/* 重置确认弹窗 */}
+        <Modal visible={showResetConfirm} transparent animationType="fade">
+          <View style={styles.resetModalOverlay}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitle}>重置数据</Text>
+              <Text style={styles.modalDesc}>确定要重置所有游戏数据吗？此操作不可恢复。</Text>
+              <View style={styles.modalBtns}>
+                <TouchableOpacity
+                  style={styles.modalCancelBtn}
+                  onPress={() => setShowResetConfirm(false)}
+                >
+                  <Text style={styles.modalCancelText}>取消</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.modalConfirmBtn}
+                  onPress={() => {
+                    localStorage.removeItem("aigame-save");
+                    window.location.reload();
+                  }}
+                >
+                  <Text style={styles.modalConfirmText}>确定重置</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
 
       <TutorialOverlay
@@ -160,7 +196,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: space.lg,
     paddingBottom: space.xxl,
-    maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
@@ -194,7 +229,7 @@ const styles = StyleSheet.create({
   descText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
-    lineHeight: 24,
+    lineHeight: 26,
     textAlign: "center",
   },
   sectionTitle: {
@@ -306,6 +341,26 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     fontFamily,
   },
+  resetButton: {
+    backgroundColor: "transparent",
+    paddingVertical: 10,
+    marginTop: space.sm,
+    alignSelf: "center",
+  },
+  resetButtonText: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    fontFamily,
+  },
+  resetModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
+  modalBox: { width: 300, backgroundColor: palette.surface, borderRadius: radius.md, padding: space.lg, alignItems: "center", ...shadow.soft },
+  modalTitle: { fontSize: fontSize.title, fontWeight: fontWeight.bold, color: palette.text, marginBottom: space.sm, fontFamily },
+  modalDesc: { fontSize: fontSize.body, color: palette.textSoft, textAlign: "center", marginBottom: space.lg, fontFamily },
+  modalBtns: { flexDirection: "row", gap: space.md },
+  modalCancelBtn: { paddingHorizontal: space.lg, paddingVertical: space.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: palette.border },
+  modalCancelText: { fontSize: fontSize.body, color: palette.textSoft, fontFamily },
+  modalConfirmBtn: { paddingHorizontal: space.lg, paddingVertical: space.sm, borderRadius: radius.pill, backgroundColor: palette.clay },
+  modalConfirmText: { fontSize: fontSize.body, color: palette.surface, fontWeight: fontWeight.bold, fontFamily },
   // 关卡选择弹窗
   modalOverlay: {
     position: "absolute",

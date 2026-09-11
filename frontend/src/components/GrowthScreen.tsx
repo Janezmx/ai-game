@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,12 @@ import {
   ScrollView,
   Dimensions,
   Modal,
+  type DimensionValue,
 } from "react-native";
 import Svg, { Circle, Line, Polyline, Polygon, Text as SvgText } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
-import { KnowledgePoint } from "@aigame/shared";
+import { KnowledgePoint, DimensionScores } from "@aigame/shared";
 import {
   palette,
   radius,
@@ -22,23 +23,28 @@ import {
   shadow,
 } from "../theme";
 import KnowledgeCard, { LEVEL_KNOWLEDGE, TRAP_EMOJI_MAP } from "./KnowledgeCard";
+import ReviewReportScreen from "./ReviewReportScreen";
+import {
+  averageDimensions,
+  averageOf,
+  DIMENSION_KEYS,
+  DIMENSION_LABELS,
+  hasAnyScore,
+  normalizeDimensions,
+} from "../utils/dimensions";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CHART_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
 const CENTER = CHART_SIZE / 2;
 const RADAR_RADIUS = CENTER * 0.65;
 
-const DIMENSION_KEYS = ["boundaryAwareness", "emotionalStability", "cognitiveClarity", "assertiveResponse"] as const;
-const DIMENSION_LABELS: Record<string, string> = {
-  boundaryAwareness: "边界意识",
-  emotionalStability: "情绪稳定",
-  cognitiveClarity: "认知清晰",
-  assertiveResponse: "坚定回应",
-};
-
 type Tab = "history" | "badges";
 
-function RadarChart({ scores }: { scores: Record<string, number> }) {
+type RadarView = "latest" | "average" | "peak";
+
+type RadarScores = Record<(typeof DIMENSION_KEYS)[number], number>;
+
+function RadarChart({ scores, references }: { scores: RadarScores; references?: RadarScores[] }) {
   const angles = DIMENSION_KEYS.map((_, i) => (i / DIMENSION_KEYS.length) * Math.PI * 2 - Math.PI / 2);
   const levels = [20, 40, 60, 80, 100];
 
@@ -47,8 +53,19 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
     y: CENTER + Math.sin(angle) * (RADAR_RADIUS * (value / 100)),
   });
 
+  const toPolygon = (d: RadarScores) =>
+    DIMENSION_KEYS.map((key, i) => {
+      const p = getPoint(angles[i], d[key] || 0);
+      return `${p.x},${p.y}`;
+    }).join(" ");
+
+  // 主多边形：图例当前选中的口径（最近一局 / 全部平均 / 历史最佳）
   const dataPoints = DIMENSION_KEYS.map((key, i) => getPoint(angles[i], scores[key] || 0));
   const polygonPoints = dataPoints.map((p) => `${p.x},${p.y}`).join(" ");
+  // 对照多边形：其余口径，只作参考；与主数据完全一致的不重复画（否则线会叠在一起）
+  const refPolygons = (references || [])
+    .filter((r) => r && DIMENSION_KEYS.some((k) => (r[k] || 0) !== (scores[k] || 0)))
+    .map(toPolygon);
   const labelPoints = DIMENSION_KEYS.map((key, i) => getPoint(angles[i], 120));
 
   return (
@@ -76,7 +93,18 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
           />
         );
       })}
-      {/* 数据区域 */}
+      {/* 其余口径（对照，浅色虚线） */}
+      {refPolygons.map((pts, i) => (
+        <Polygon
+          key={`ref-${i}`}
+          points={pts}
+          fill="none"
+          stroke={palette.textFaint}
+          strokeWidth={1.5}
+          strokeDasharray="4 3"
+        />
+      ))}
+      {/* 数据区域：当前选中口径 */}
       <Polygon points={polygonPoints} fill="#E0A89944" stroke={palette.primaryDark} strokeWidth={2} />
       {/* 数据点 */}
       {dataPoints.map((p, i) => (
@@ -98,7 +126,7 @@ function RadarChart({ scores }: { scores: Record<string, number> }) {
       ))}
       {/* 中心数值 */}
       <SvgText x={CENTER} y={CENTER + 4} fill={palette.primaryDark} fontSize={18} fontWeight="bold" textAnchor="middle">
-        {Math.round((scores.boundaryAwareness + scores.emotionalStability + scores.cognitiveClarity + scores.assertiveResponse) / 4)}
+        {averageOf(scores)}
       </SvgText>
     </Svg>
   );
@@ -146,15 +174,75 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
   const { gameHistory, badges, review, masteredKnowledgePointIds } = useGameStore();
   const [tab, setTab] = useState<Tab>("history");
+  const [radarView, setRadarView] = useState<RadarView>("latest");
+  // 打开的历史复盘 id：非空时整页切换为复盘详情，返回后自动回到成长页原状态
+  const [openReportId, setOpenReportId] = useState<string | null>(null);
 
-  const bestScores = review.bestScores;
   const scoreTrend = gameHistory.map((r) => r.avgScore);
+  // 雷达图三种口径（图例可切换）：
+  //   latest  = 最近一局的四维（会随输赢升降）
+  //   average = 全部对局逐维取平均（整体水平）
+  //   peak    = 逐维取最大值（历史最佳）。它单调不减，只能当参照，不能当主数据——
+  //             否则就是"永远是满分、输了也不改"
+  const latestRecord = gameHistory.length > 0 ? gameHistory[gameHistory.length - 1] : null;
+  // 「历史最佳」= 历史各局里综合分最高的那**一局**（局粒度，直接展示那一局的四维）。
+  // 不能用 review.bestScores：它是对话中逐轮逐维取 max 的峰值，同一局内 max ≥ 平均，
+  // 会出现「只打过一局 51 分，历史最佳却 61 分」的错位；而且它跨应用重启会被恢复回来，
+  // 导致「历史最佳」里混入并非任何一局真实成绩的合成分。
+  const peakRecord = useMemo(() => {
+    if (gameHistory.length === 0) return null;
+    return gameHistory.reduce((best, r) =>
+      (r.avgScore ?? averageOf(r.dimensions)) > (best.avgScore ?? averageOf(best.dimensions))
+        ? r
+        : best
+    );
+  }, [gameHistory]);
+  const peakScores = useMemo(() => {
+    // 旧战绩/旧存档里可能混入 0~1 小数制评分（0.62 本意是 62 分），归一化后再上雷达图
+    if (peakRecord) return normalizeDimensions(peakRecord.dimensions);
+    // 还没有任何对局记录（例如当前这一局尚未结算）时，退回本局逐轮峰值兜底，避免雷达图空掉
+    return hasAnyScore(review.bestScores) ? normalizeDimensions(review.bestScores) : null;
+  }, [peakRecord, review.bestScores]);
+
+  type RadarViewItem = { key: RadarView; label: string; scores: DimensionScores };
+  const radarViews = useMemo(() => {
+    const raw: { key: RadarView; label: string; scores: DimensionScores | null }[] = [
+      {
+        key: "latest",
+        label: "最近一局",
+        scores: latestRecord ? normalizeDimensions(latestRecord.dimensions) : null,
+      },
+      {
+        key: "average",
+        label: "全部平均",
+        scores: averageDimensions(gameHistory.map((r) => r.dimensions)),
+      },
+      { key: "peak", label: "历史最佳", scores: peakScores },
+    ];
+    // 四维全 0 视为无数据，不显示该口径（否则只会有一个落在中心的无意义点）
+    return raw.filter((v): v is RadarViewItem => hasAnyScore(v.scores));
+  }, [latestRecord, gameHistory, peakScores]);
+  // 选中的口径是主数据（实色），另外两个作为浅色虚线参照
+  const activeView = radarViews.find((v) => v.key === radarView) ?? radarViews[0] ?? null;
+  const radarScores = activeView?.scores ?? null;
+  const referenceScores = radarViews.filter((v) => v.key !== activeView?.key).map((v) => v.scores);
+  const hasRadarData = hasAnyScore(radarScores);
   const victories = gameHistory.filter((r) => r.victory).length;
   const totalGames = gameHistory.length;
   const unlockedBadges = badges.filter((b) => b.unlockedAt);
 
   const allKnowledge = Object.values(LEVEL_KNOWLEDGE);
   const [selectedKp, setSelectedKp] = useState<KnowledgePoint | null>(null);
+
+  // 历史复盘是独立只读页面，直接整页替换成长页（返回时本页状态原样保留）
+  if (openReportId) {
+    return (
+      <ReviewReportScreen
+        reportId={openReportId}
+        onBack={() => setOpenReportId(null)}
+      />
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -236,14 +324,53 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
             </View>
 
             {/* 雷达图 */}
-            {bestScores && (
-              <View style={styles.chartCard}>
-                <Text style={styles.chartTitle}>📊 四维能力雷达</Text>
-                <View style={styles.chartCenter}>
-                  <RadarChart scores={bestScores} />
-                </View>
-              </View>
-            )}
+            <View style={styles.chartCard}>
+              <Text style={styles.chartTitle}>📊 四维能力雷达</Text>
+              {hasRadarData && radarScores ? (
+                <>
+                  <View style={styles.chartCenter}>
+                    <RadarChart scores={radarScores} references={referenceScores} />
+                  </View>
+                  {/* 图例 = 口径切换器：点哪一项，实色主数据就换成哪一项，其余两项退为虚线参照 */}
+                  <View style={styles.viewRow}>
+                    {radarViews.map((v) => {
+                      const active = v.key === activeView?.key;
+                      return (
+                        <TouchableOpacity
+                          key={v.key}
+                          testID={`radar-view-${v.key}`}
+                          style={[styles.viewChip, active && styles.viewChipActive]}
+                          onPress={() => setRadarView(v.key)}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel={`查看${v.label}的四维评分`}
+                        >
+                          {/* 图标槽固定宽度：圆点与虚线占同一尺寸，切换口径时 chip 宽度不变、图例不抖动 */}
+                          <View style={styles.legendIcon}>
+                            {active ? (
+                              <View style={[styles.legendDot, { backgroundColor: palette.primaryDark }]} />
+                            ) : (
+                              <View style={styles.legendDash} />
+                            )}
+                          </View>
+                          <Text style={[styles.viewChipText, active && styles.viewChipTextActive]}>
+                            {v.label}
+                            {v.key === "latest" && latestRecord ? ` 第${latestRecord.level}关` : ""}
+                            {" · "}
+                            {averageOf(v.scores)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.legendHint}>
+                    点图例切换口径：实色为当前查看，虚线为另外两项；历史最佳取综合分最高的那一局
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.emptyText}>完成一局对战并保存记录后，这里会生成你的四维能力雷达图</Text>
+              )}
+            </View>
 
             {/* 趋势折线图 */}
             {scoreTrend.length >= 2 && (
@@ -260,21 +387,49 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
             {gameHistory.length === 0 && (
               <Text style={styles.emptyText}>还没有对战记录，快去挑战吧！</Text>
             )}
-            {[...gameHistory].reverse().map((record, idx) => (
-              <View key={idx} style={styles.recordCard}>
-                <View style={styles.recordHeader}>
-                  <Text style={styles.recordLevel}>第 {record.level} 关</Text>
-                  <Text style={[styles.recordResult, record.victory ? styles.victory : styles.defeat]}>
-                    {record.victory ? "✅ 胜利" : "💔 失败"}
+            {[...gameHistory].reverse().map((record, idx) => {
+              // 只有存过复盘的记录才能点开；旧存档没有 reportId，保持纯展示
+              const reportId = record.reportId;
+              const body = (
+                <>
+                  <View style={styles.recordHeader}>
+                    <Text style={styles.recordLevel}>第 {record.level} 关</Text>
+                    <Text style={[styles.recordResult, record.victory ? styles.victory : styles.defeat]}>
+                      {record.victory ? "✅ 胜利" : "💔 失败"}
+                    </Text>
+                  </View>
+                  <Text style={styles.recordTitle}>{record.levelTitle}</Text>
+                  <View style={styles.recordFooter}>
+                    <Text style={styles.recordScore}>综合评分: {record.avgScore}</Text>
+                    {reportId && (
+                      <Text style={styles.recordOpenHint}>查看复盘 ›</Text>
+                    )}
+                  </View>
+                  <Text style={styles.recordTime}>
+                    {new Date(record.timestamp).toLocaleString("zh-CN")}
                   </Text>
-                </View>
-                <Text style={styles.recordTitle}>{record.levelTitle}</Text>
-                <Text style={styles.recordScore}>综合评分: {record.avgScore}</Text>
-                <Text style={styles.recordTime}>
-                  {new Date(record.timestamp).toLocaleString("zh-CN")}
-                </Text>
-              </View>
-            ))}
+                </>
+              );
+              if (!reportId) {
+                return (
+                  <View key={idx} style={styles.recordCard}>
+                    {body}
+                  </View>
+                );
+              }
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.recordCard}
+                  onPress={() => setOpenReportId(reportId)}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel={`查看第 ${record.level} 关复盘详情`}
+                >
+                  {body}
+                </TouchableOpacity>
+              );
+            })}
           </>
         ) : (
           /* 徽章墙 */
@@ -322,9 +477,8 @@ const styles = StyleSheet.create({
   container: {
     display: "flex",
     flexDirection: "column",
-    height: "100vh",
+    height: "100vh" as DimensionValue,
     backgroundColor: palette.bg,
-    maxWidth: 500,
     width: "100%",
     alignSelf: "center",
   },
@@ -335,7 +489,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
   },
-  backBtn: { width: 60 },
+  // 固定宽度同时用于左侧返回键与右侧占位（保证标题居中）；
+  // 「← 返回」在 fontSize.sub(18px) 下约需 52~59px，故留到 76 避免折行
+  backBtn: { width: 76 },
   backText: { color: palette.primaryDark, fontSize: fontSize.sub, fontFamily },
   title: { color: palette.primaryDark, fontSize: fontSize.title, fontWeight: fontWeight.bold, textAlign: "center", fontFamily },
   statsRow: {
@@ -351,7 +507,7 @@ const styles = StyleSheet.create({
     ...shadow.soft,
   },
   statItem: { alignItems: "center" },
-  statValue: { color: palette.primaryDark, fontSize: 24, fontWeight: fontWeight.bold, fontFamily },
+  statValue: { color: palette.primaryDark, fontSize: 26, fontWeight: fontWeight.bold, fontFamily },
   statLabel: { color: palette.textSoft, fontSize: fontSize.caption, marginTop: 2, fontFamily },
   tabRow: {
     flexDirection: "row",
@@ -415,6 +571,33 @@ const styles = StyleSheet.create({
   },
   chartTitle: { color: palette.primaryDark, fontSize: fontSize.sub, fontWeight: fontWeight.semibold, marginBottom: space.sm, fontFamily },
   chartCenter: { alignItems: "center" },
+  viewRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: space.xs,
+    marginTop: space.sm,
+  },
+  viewChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: space.sm,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceSoft,
+  },
+  viewChipActive: { backgroundColor: "rgba(224,168,153,0.28)", borderColor: palette.primaryDark },
+  viewChipText: { color: palette.textSoft, fontSize: 12, fontFamily },
+  // 选中态不加粗：字重变化会让文本重新测量宽度，同样造成图例抖动；用颜色 + 背景 + 边框区分
+  viewChipTextActive: { color: palette.primaryDark, fontFamily },
+  // 图标槽固定 14×14：圆点(8×8)与虚线(14 宽)共用同一占位，点图例切换时 chip 宽度不发生变化
+  legendIcon: { width: 14, height: 14, alignItems: "center", justifyContent: "center", marginRight: 6 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendDash: { width: 14, height: 0, borderTopWidth: 1.5, borderStyle: "dashed", borderColor: palette.textFaint },
+  legendHint: { color: palette.textFaint, fontSize: 12, textAlign: "center", marginTop: space.xs, fontFamily },
   recordCard: {
     backgroundColor: palette.surface,
     borderRadius: radius.md,
@@ -431,6 +614,8 @@ const styles = StyleSheet.create({
   recordTitle: { color: palette.textSoft, fontSize: fontSize.caption, marginTop: 2, fontFamily },
   recordScore: { color: palette.text, fontSize: fontSize.caption, marginTop: space.xs, fontFamily },
   recordTime: { color: palette.textFaint, fontSize: fontSize.caption, marginTop: 2, fontFamily },
+  recordFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  recordOpenHint: { color: palette.primary, fontSize: fontSize.caption, fontWeight: fontWeight.bold, fontFamily },
   badgeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -448,11 +633,11 @@ const styles = StyleSheet.create({
     ...shadow.soft,
   },
   badgeLocked: { opacity: 0.4, borderColor: palette.border },
-  badgeIcon: { fontSize: 32, marginBottom: space.xs },
+  badgeIcon: { fontSize: 34, marginBottom: space.xs },
   badgeIconLocked: { opacity: 0.5 },
   badgeName: { color: palette.text, fontSize: fontSize.caption, fontWeight: fontWeight.semibold, textAlign: "center", fontFamily },
   badgeNameLocked: { color: palette.textFaint },
-  badgeDesc: { color: palette.textSoft, fontSize: 10, textAlign: "center", marginTop: 2, fontFamily },
+  badgeDesc: { color: palette.textSoft, fontSize: 12, textAlign: "center", marginTop: 2, fontFamily },
 
   kpArrow: { color: palette.textFaint, fontSize: fontSize.sub, marginLeft: space.xs },
 

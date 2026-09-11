@@ -5,3 +5,16 @@ dist/
 *.tsbuildinfo
 *.local
 release/
+
+# 构建产物 / 打包输出
+release*/
+*.rar
+frontend/.verify-dist/
+frontend/_dist_old/
+frontend/dist-verify/
+
+# 日志与临时文件
+*.log
+.tmp_*
+test_req.json
+.playwright-cli/

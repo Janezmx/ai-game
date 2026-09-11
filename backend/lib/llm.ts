@@ -1,6 +1,7 @@
 /**
  * LLM API 调用封装 - DeepSeek 兼容 OpenAI 接口
  */
+import https from "https";
 
 export interface LLMConfig {
   apiKey: string;
@@ -8,10 +9,79 @@ export interface LLMConfig {
   model: string;
 }
 
+/** 用 Node https 模块发起请求（避免 fetch 在某些网络环境下连接超时） */
+function httpsRequest(
+  baseUrl: string,
+  bodyStr: string,
+  apiKey: string,
+  timeout = 120000
+): Promise<{
+  status: number;
+  headers: any;
+  body: () => Promise<string>;
+  onChunk: (cb: (c: Buffer) => void) => void;
+  timing: { ttftMs: number; totalMs: number };
+}> {
+  return new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    let ttftMs = 0;
+    const url = new URL(baseUrl.replace(/\/+$/, "") + "/chat/completions");
+    const opts = {
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Length": Buffer.byteLength(bodyStr),
+      },
+      timeout,
+    };
+    const req = https.request(opts, (res) => {
+      const chunks: Buffer[] = [];
+      const onChunk = (cb: (c: Buffer) => void) => {
+        res.on("data", (c: Buffer) => cb(c));
+      };
+      res.on("data", (c: Buffer) => {
+        if (!ttftMs) ttftMs = Date.now() - t0; // 首个数据块 ≈ 首字时间
+        chunks.push(c);
+      });
+      res.on("end", () => {
+        resolve({
+          status: res.statusCode || 500,
+          headers: res.headers,
+          body: () => Promise.resolve(Buffer.concat(chunks).toString("utf-8")),
+          onChunk,
+          timing: { ttftMs, totalMs: Date.now() - t0 },
+        });
+      });
+    });
+    req.on("error", (e) => {
+      console.warn(`[llm] 网络请求失败: ${(e as any)?.message}`);
+      reject(e);
+    });
+    req.on("timeout", () => {
+      console.warn(`[llm] 请求超时（>${timeout}ms）`);
+      req.destroy();
+      reject(new Error("LLM timeout"));
+    });
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
 const DEFAULT_CONFIG: LLMConfig = {
-  apiKey: process.env.DEEPSEEK_API_KEY || "",
-  baseUrl: "https://api.deepseek.com",
+  apiKey: process.env.API_KEY || process.env.DEEPSEEK_API_KEY || "",
+  baseUrl: process.env.BASE_URL || "https://api.deepseek.com",
   model: process.env.MODEL_NAME || "deepseek-v4-flash",
+};
+
+// 备用模型配置：主模型（DeepSeek）重试仍失败后自动降级使用（GLM）
+const BACKUP_CONFIG: LLMConfig = {
+  apiKey: process.env.BACKUP_API_KEY || "",
+  baseUrl: process.env.BACKUP_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
+  model: process.env.BACKUP_MODEL_NAME || "glm-4.7-flashx",
 };
 
 /**
@@ -23,27 +93,33 @@ export async function createChatCompletionStream(
 ): Promise<ReadableStream> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
-  const response = await fetch(`${mergedConfig.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${mergedConfig.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: mergedConfig.model,
-      messages,
-      stream: true,
-      temperature: 0.8,
-      max_tokens: 2048,
-    }),
+  const bodyStr = JSON.stringify({
+    model: mergedConfig.model,
+    messages,
+    stream: true,
+    temperature: 1,
+    max_tokens: 3072,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM API Error ${response.status}: ${errorText}`);
+  const res = await httpsRequest(mergedConfig.baseUrl, bodyStr, mergedConfig.apiKey);
+  if (res.status !== 200) {
+    const errText = await res.body();
+    throw new Error(`LLM API Error ${res.status}: ${errText}`);
   }
+  console.log(
+    `[llm:stream] 模型 ${mergedConfig.model} 成功 status=200 ttft≈${res.timing.ttftMs}ms total≈${res.timing.totalMs}ms`
+  );
 
-  return response.body!;
+  // 将 https 流包装为 ReadableStream（供 Next.js 路由消费）
+  return new ReadableStream({
+    start(controller) {
+      res.onChunk((chunk) => {
+        controller.enqueue(new Uint8Array(chunk));
+      });
+      // 流结束时关闭
+      res.body().then(() => controller.close()).catch((e) => controller.error(e));
+    },
+  });
 }
 
 /**
@@ -94,7 +170,7 @@ export function parseSSEStream(
 }
 
 /**
- * 非流式调用（用于生成 NPC 初始数据）
+ * 非流式调用（用于生成 NPC 初始数据）— 内部用流式读取避免等待完整响应
  */
 export async function createChatCompletion(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
@@ -102,37 +178,87 @@ export async function createChatCompletion(
 ): Promise<string> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
-  const buildBody = (withJsonMode: boolean) =>
-    JSON.stringify({
-      model: mergedConfig.model,
-      messages,
-      stream: false,
-      temperature: 0.8,
-      max_tokens: 4096,
-      ...(withJsonMode ? { response_format: { type: "json_object" } } : {}),
-    });
+  // 用指定配置发一次请求（带 json_object 400 回退 + 失败重试）
+  const requestWithConfig = async (cfg: LLMConfig, label: string): Promise<string> => {
+    const buildBody = (withJsonMode: boolean) =>
+      JSON.stringify({
+        model: cfg.model,
+        messages,
+        stream: true,
+        temperature: 1,
+        max_tokens: 3072,
+        ...(withJsonMode ? { response_format: { type: "json_object" } } : {}),
+      });
 
-  const post = async (withJsonMode: boolean) =>
-    fetch(`${mergedConfig.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${mergedConfig.apiKey}`,
-      },
-      body: buildBody(withJsonMode),
-    });
+    const post = async (withJsonMode: boolean) =>
+      httpsRequest(cfg.baseUrl, buildBody(withJsonMode), cfg.apiKey);
 
-  // 优先尝试 json_object 模式；若代理/模型不支持该参数，则去除后重试
-  let response = await post(true);
-  if (!response.ok && response.status === 400) {
-    response = await post(false);
+    // 带重试：最多尝试 3 次（含 json_object 400 回退）
+    const postWithRetry = async (withJsonMode: boolean): Promise<any> => {
+      let lastErr: any = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await post(withJsonMode);
+          if (r.status === 200) return { ...r, attemptNo: attempt + 1 };
+          if (r.status === 400 && withJsonMode) return { ...r, attemptNo: attempt + 1 }; // 交给外层回退普通模式
+          lastErr = new Error(`LLM API Error ${r.status}`);
+          console.warn(`[llm:${label}] 返回 ${r.status}，重试 ${attempt + 1}/2`);
+        } catch (e) {
+          lastErr = e;
+          console.warn(`[llm:${label}] 失败/超时，重试 ${attempt + 1}/2:`, (e as any)?.message);
+        }
+      }
+      throw lastErr || new Error("LLM 请求失败");
+    };
+
+    let res = await postWithRetry(true);
+    if (res.status === 400) {
+      res = await postWithRetry(false);
+    }
+    if (res.status !== 200) {
+      const errText = await res.body();
+      throw new Error(`LLM API Error ${res.status}: ${errText}`);
+    }
+    return res.body().then((body: string) => {
+      const text = parseStreamText(body);
+      console.log(
+        `[llm:${label}] 模型 ${cfg.model} 第${res.attemptNo}次尝试成功 status=200 ` +
+          `ttft≈${res.timing.ttftMs}ms total≈${res.timing.totalMs}ms output=${text.length}chars`
+      );
+      return text;
+    });
+  };
+
+  // 1) 先用主模型（DeepSeek）请求，失败/超时重试 2 次
+  try {
+    return await requestWithConfig(mergedConfig, "primary");
+  } catch (primaryErr) {
+    console.error("[llm] 主模型请求失败:", (primaryErr as any)?.message);
   }
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM API Error ${response.status}: ${errorText}`);
+  // 2) 主模型彻底失败 → 降级到备用模型（GLM）
+  if (BACKUP_CONFIG.apiKey && BACKUP_CONFIG.baseUrl && BACKUP_CONFIG.model) {
+    console.warn(`[llm] 降级到备用模型 ${BACKUP_CONFIG.model}`);
+    return await requestWithConfig(BACKUP_CONFIG, "backup");
   }
 
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || "";
+  throw new Error("主模型请求失败，且未配置备用模型");
+}
+
+/** 解析 SSE 流文本，提取内容 */
+function parseStreamText(text: string): string {
+  let fullContent = "";
+  const lines = text.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data: ")) continue;
+    const dataStr = trimmed.slice(6);
+    if (dataStr === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(dataStr);
+      const delta = parsed.choices?.[0]?.delta?.content || "";
+      fullContent += delta;
+    } catch {}
+  }
+  return fullContent;
 }

@@ -1,0 +1,50 @@
+- generic [ref=f1e76]:
+  - generic [ref=f1e137]:
+    - generic [ref=f1e138]:
+      - generic [ref=f1e139]: 第 2/5 关
+      - generic [ref=f1e140]: 职场PUA
+      - generic [ref=f1e141]: 能力贬低 · 价值否定
+      - generic [ref=f1e142] [cursor=pointer]: 📖 本关知识点：职场PUA ▼
+    - generic [ref=f1e144]:
+      - generic [ref=f1e145]: 💚
+      - generic [ref=f1e147]:
+        - generic [ref=f1e148]:
+          - generic [ref=f1e149]: 🛡️
+          - generic [ref=f1e150]: 抵抗值
+          - generic [ref=f1e153]: "90"
+        - generic [ref=f1e154]:
+          - generic [ref=f1e155]: ⚡
+          - generic [ref=f1e156]: NPC操控
+          - generic [ref=f1e159]: "55"
+      - generic [ref=f1e160]: 回合 0
+    - generic [ref=f1e161]: 🎯 NPC操控归零即胜 | 满5回合操控<50即胜 | 抵抗归零则败
+    - generic [ref=f1e162]:
+      - generic [ref=f1e163]: 🎭
+      - generic [ref=f1e164]:
+        - generic [ref=f1e165]: 场景前提
+        - generic [ref=f1e166]: 公开批评
+    - generic [ref=f1e169]:
+      - generic [ref=f1e170]: 🎭
+      - generic [ref=f1e172]: 我当着全组的面说你，是想给你长记性。别人想让我说，我还不稀罕说。你这点批评都受不了，以后怎么扛事？
+    - generic [ref=f1e174]:
+      - generic [ref=f1e175]: 法器
+      - generic [ref=f1e177]:
+        - button "使用法器 心盾" [ref=f1e178] [cursor=pointer]:
+          - generic [ref=f1e179]: 🛡️
+          - generic [ref=f1e180]: 心盾
+        - button "使用法器 真言镜" [ref=f1e181] [cursor=pointer]:
+          - generic [ref=f1e182]: 🔍
+          - generic [ref=f1e183]: 真言镜
+        - button "使用法器 破谎矛" [ref=f1e184] [cursor=pointer]:
+          - generic [ref=f1e185]: 🔱
+          - generic [ref=f1e186]: 破谎矛
+        - button "使用法器 明辨铃" [ref=f1e187] [cursor=pointer]:
+          - generic [ref=f1e188]: 🔔
+          - generic [ref=f1e189]: 明辨铃
+    - generic [ref=f1e190]:
+      - textbox "回应NPC..." [ref=f1e191]
+      - generic [ref=f1e192]:
+        - button "发送消息" [disabled]:
+          - generic [ref=f1e193]: 发送
+  - button "返回首页" [ref=f1e135] [cursor=pointer]:
+    - generic [ref=f1e136]: 🏠
