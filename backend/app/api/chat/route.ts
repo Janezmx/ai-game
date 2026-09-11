@@ -124,6 +124,61 @@ function toPercentScore(v: unknown, fallback: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
+/** 四维字段名（顺序与提示词、结算保持一致） */
+const DIMENSION_KEYS = [
+  "boundaryAwareness",
+  "emotionalStability",
+  "cognitiveClarity",
+  "assertiveResponse",
+] as const;
+
+/**
+ * 判断四维评分是否是"未真正评估"的占位值。
+ *
+ * 模型偶发整组直接输出 0/0/0/0 或 50/50/50/50：这些是合法有限数字，能绕过
+ * "必须是数字"的校验，于是被当成真实成绩写进 dimensionHistory、计入本局均分
+ * 与历史最高分（实测事故：某一局第 2 轮四维全 0、第 3 轮四维全 50，把本局
+ * 综合分从 80+ 拉到 58）。真实玩家的四项能力不可能完全一模一样，
+ * 故判据为：四维完全相等且落在 0 / 50。
+ */
+function isPlaceholderDimensions(dims: unknown): boolean {
+  if (!dims || typeof dims !== "object") return false;
+  const src = dims as Record<string, unknown>;
+  const vals = DIMENSION_KEYS.map((k) => toPercentScore(src[k], NaN));
+  if (vals.some((v) => !Number.isFinite(v))) return false;
+  return vals.every((v) => v === vals[0]) && (vals[0] === 0 || vals[0] === 50);
+}
+
+/**
+ * 宽松解析 LLM 返回的评估 JSON，仅用于"占位评分重试"那一次的响应。
+ * 首次解析已有一段完整的多层修复链，这里复用同一批修复函数取最小集合，
+ * 避免把那 90 多行逻辑重复一遍。
+ */
+function parseAssessmentLoose(raw: string): any {
+  const clean = String(raw || "")
+    .replace(/```(?:json|JSON)\s*/g, "")
+    .replace(/```/g, "")
+    .trim();
+  let text = clean;
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first !== -1 && last !== -1 && last > first) text = text.slice(first, last + 1);
+  const attempts: Array<() => any> = [
+    () => JSON.parse(text),
+    () => JSON.parse(text.replace(/\\(?!["\\/bfnrtu])/g, "")),
+    () => tryParseWithFullwidthColonRepair(text),
+    () => tryParseWithDialogueRepair(text),
+    () => tryParseTruncatedJson(text),
+  ];
+  for (const fn of attempts) {
+    try {
+      const r = fn();
+      if (r && typeof r === "object") return r;
+    } catch {}
+  }
+  return null;
+}
+
 // 台词生成指令：NPC 对玩家最新消息的直接回应（纯文本流式，不经评估 JSON 生成）
 const DIALOGUE_OUTPUT_INSTRUCTION = `## 本轮台词输出要求
 
@@ -1068,6 +1123,57 @@ export async function POST(request: NextRequest) {
                 assessment.degraded = true;
               }
               rawDims[k] = toPercentScore(rawDims[k], 50);
+            }
+          }
+
+          // 6.5.1 占位评分重试：模型偶发不真正评估，整组直接吐 0/0/0/0 或 50/50/50/50
+          //      （实测事故：某局第 2 轮四维全 0、第 3 轮四维全 50，本局综合分被从 80+
+          //       拉到 58）。这类值是合法有限数字，6.5 的"必须是数字"校验拦不住，会被当成
+          //       真实成绩写进 dimensionHistory、计入本局均分与历史最高分。
+          //       命中时补一句强约束重问一次（只试首选评估模型，避免拖慢回合尾部关键路径）；
+          //       仍拿不到真实评分则标 degraded，交给既有兜底（不计分、复盘不生成对比文案）。
+          if (!assessment.degraded && isPlaceholderDimensions(assessment.dimensions)) {
+            console.warn(
+              "[chat] 检测到占位评分（四维全等且为 0/50），重试评估一次。原值:",
+              JSON.stringify(assessment.dimensions)
+            );
+            messages.push({
+              role: "system",
+              content:
+                "你上一次输出的四维评分整组等于 0 或 50，属于未真正评估的占位值，判定为无效。" +
+                "请依据玩家回应的真实表现重新评估：四个维度分别给出互不相同的 0-100 整数分，" +
+                "禁止整组相同，禁止用 0 或 50 填充。只输出完整 JSON，不要任何解释。",
+            });
+            for (const cand of evalCandidates.slice(0, 1)) {
+              try {
+                const rr = await requestWithRetry(cand, `评估占位重试 ${cand.model}`);
+                const reparsed = rr.status === 200 ? parseAssessmentLoose(rr.content) : null;
+                const rd = reparsed?.dimensions;
+                if (!rd || typeof rd !== "object") {
+                  console.warn(`[chat] 评估占位重试（${cand.model}）未取到 dimensions，保留原评分`);
+                  continue;
+                }
+                for (const k of DIMENSION_KEYS) {
+                  rd[k] = toPercentScore(rd[k], NaN);
+                }
+                if (DIMENSION_KEYS.some((k) => !Number.isFinite(rd[k]))) continue;
+                if (isPlaceholderDimensions(rd)) {
+                  console.warn(`[chat] 评估占位重试（${cand.model}）仍为占位评分:`, JSON.stringify(rd));
+                  continue;
+                }
+                // 拿到真实评分：整体覆盖数值与文本字段；nextDialogue 已随台词段推送，丢弃
+                const rest: any = { ...reparsed };
+                delete rest.nextDialogue;
+                assessment = { ...assessment, ...rest, dimensions: rd, degraded: false };
+                console.log(`[chat] 评估占位重试成功（${cand.model}）:`, JSON.stringify(rd));
+                break;
+              } catch (e) {
+                console.warn(`[chat] 评估占位重试异常（${cand.model}）:`, (e as any)?.message);
+              }
+            }
+            messages.pop(); // 移除本次追加的重试指令，避免污染后续会话上下文
+            if (isPlaceholderDimensions(assessment.dimensions)) {
+              assessment.degraded = true;
             }
           }
           // 6.6 trapType/playerStatus 运行时兜底：复盘界面直接渲染这两字段并执行

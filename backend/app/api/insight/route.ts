@@ -54,19 +54,45 @@ function extractJson(raw: string): any {
 function cleanAlternativeText(input: string): string {
   const rawText = (input || "").replace(/[\uFFFD\uFFFE\uFFFF]/g, "").trim();
   if (!rawText) return "";
-  // 0. 宽松基准：引号内内容优先，否则取冒号/逗号后的建议片段。
-  //    严格清洗把文本剔空时回退到这里，避免模型输出风格波动把整条建议误杀成空。
+  // 0. 宽松基准：仅当引号/前缀确实只是"包裹层"时才取出其中的建议正文。
+  //    关键限制：建议正文本身常带引用（如 别用"为你好"来绑架我），若不加判断地取第一对引号
+  //    内的片段，三条都引用了 NPC 原话的建议会被同时截成同一个短语（全都变成"为你好"），
+  //    而 rationale 不经过清洗 → 界面上就是"三句一样的话 + 三句不同的解释"。
+  //    判据：引号/标点之外残留的前缀文字必须少于正文，才认定模型是在"引用整条建议"。
   let loose = "";
+  let looseFallback = "";
   const qm = rawText.match(/["\u2018\u201C]([^"'\u2018\u201C\u2019\u201D']+)["\u2019\u201D']/);
-  if (qm && qm[1].length > 2) loose = qm[1].trim();
-  else {
-    const afterPunct = rawText.split(/[：:，,]\s*/).pop();
-    if (afterPunct && afterPunct.length >= rawText.length * 0.3) loose = afterPunct.trim();
+  if (qm && qm[1].length > 2) {
+    const inner = qm[1].trim();
+    looseFallback = inner;
+    const outside = rawText.length - qm[0].length;
+    if (inner.length > outside) loose = inner;
+  } else {
+    // 仅当明确出现冒号（"玩家可以说：xxx" 这类包裹式输出）时才取冒号后的正文。
+    // 逗号/顿号不能作为切分依据——正文本身常带逗号，按逗号切尾段会把
+    // "说真的，我不接受这种安排" 这类完整句子截掉前半句（这正是"三句被截成同一短语"的同源问题）。
+    const colonAt = rawText.search(/[：:]/);
+    if (colonAt !== -1) {
+      const afterColon = rawText.slice(colonAt + 1).replace(/^[\s"'\u2018\u201C\u2019\u201D]+/, "").trim();
+      if (afterColon && afterColon.length >= rawText.length * 0.6) {
+        loose = afterColon;
+        looseFallback = loose;
+      }
+    }
   }
   let text = loose || rawText;
   // 1. 剥离引导词
   text = text.replace(/^(可以|建议|试着|尝试|不妨|比如|例如|可以说|坚定[^，：:]{0,20}[地，]|冷静[地，])/g, "").trim();
-  text = text.replace(/^(陈述|表达|说明|告诉|指出|回应|回复|说|喊)(自己的|你的|对方的|，|。|\s)*/, "").trim();
+  // 允许「回应说：」「陈述自己的感受：」这类引导词 + 尾随标点被一次性剥离干净。
+  // 关键约束：引导词后必须跟着标点才算引导词，否则 "说实话/说真的" 这类正文会被误削成 "实话/真的"。
+  text = text
+    .replace(
+      /^(?:(?:陈述|表达|说明|告诉|指出|回应|回复|说|喊)(?:说|道)?(?:自己的|你的|对方的)?(?:感受|想法|立场|观点|态度|需求|边界|界限|底线)?\s*[，。：:,、]\s*)+/,
+      ""
+    )
+    .trim();
+  // 上一步剥掉引导词后可能只剩开头标点（如 "建议：xxx" 剥掉"建议"后剩 "：xxx"），一并清掉
+  text = text.replace(/^[，。：:,、\s]+/, "").trim();
   // 2. 第一人称转换
   if (text && !text.includes("我") && !text.includes("我们")) {
     const advicePats = /^(坚持|保持|学会|记住|需要|应该|要努力|要勇敢|不要|别|永远|一定|必须|坚定|明确|勇敢|努力|试着|尝试)/;
@@ -80,7 +106,7 @@ function cleanAlternativeText(input: string): string {
   if (text && !/[我你他她它]/.test(text) && text.length < 10) text = "";
   text = text.trim();
   // 4. 回退：清洗后被剔空/太短 → 使用宽松提取片段，确保至少保留一句可发送的原话
-  if (text.length < 3 && loose.length >= 3) text = loose;
+  if (text.length < 3 && looseFallback.length >= 3) text = looseFallback;
   return text;
 }
 

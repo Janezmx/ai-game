@@ -195,8 +195,12 @@ export default function ReviewScreen({
         trapType: assess.trapType,
         playerStatus: assess.playerStatus,
         dimensions: assess.dimensions,
-        prevDimensions:
-          s.review.rounds[idx - 1]?.assessment?.dimensions ?? null,
+        // 上一轮若走了兜底（degraded），其 dimensions 是后端补的占位值，不能当对比基线，
+        // 否则会生成"某维度由 50 升至 82"这种拿假分编出来的进步文案。传 null 让后端
+        // 按"缺少上一轮评分"处理，只依据当前轮表现点评。
+        prevDimensions: s.review.rounds[idx - 1]?.assessment?.degraded
+          ? null
+          : s.review.rounds[idx - 1]?.assessment?.dimensions ?? null,
         roundNumber: idx + 1,
         levelTitle: level ? `第 ${level} 关` : undefined,
         // 兜底轮的分数是占位值：告诉后端禁止据此生成"下降X分"之类的对比文案
