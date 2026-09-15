@@ -117,7 +117,7 @@ export default function GamePage() {
 
   const handleRetryLevel = useCallback(() => {
     setShowRetryModal(false);
-    // 重置到当前关卡（保留心域/护盾），回到准备阶段后即可重新挑战
+    // 重置到当前关卡（心域血量等全部回到本关初始值），回到准备阶段后即可重新挑战
     resetForLevel(currentLevel);
   }, [resetForLevel, currentLevel]);
 
@@ -272,7 +272,13 @@ export default function GamePage() {
                 <View style={styles.modalButtons}>
                   <TouchableOpacity
                     style={styles.modalCancelBtn}
-                    onPress={() => setShowNextLevelModal(false)}
+                    onPress={() => {
+                      setShowNextLevelModal(false);
+                      // 「再等等」= 暂不推进下一关，留在本关重新开始。
+                      // 必须显式重置本关状态：否则 conversation 里还留着上一局的对话，
+                      // 玩家点「开始对话入侵」会直接看到上一次的整段对话。
+                      resetForLevel(currentLevel);
+                    }}
                     accessibilityLabel="再等等"
                     accessibilityRole="button"
                   >

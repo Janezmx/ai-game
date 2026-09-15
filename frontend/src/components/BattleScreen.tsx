@@ -46,6 +46,26 @@ function makeMsgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** 归一化：去掉所有空白与中英文标点符号，用于「明辨铃建议是否被采纳」的宽松比对 */
+function normalizeForAdoption(s: string): string {
+  return s.replace(/[\p{P}\p{Z}\p{S}]/gu, "");
+}
+
+/**
+ * 判断玩家实际发送的内容算不算「采纳了明辨铃的建议」。
+ * 用归一化后的相等 / 互相包含来判定，让"加个语气词、改个标点"仍然算采纳。
+ * 同时用长度阈值挡住短文本的子串误匹配（如建议是长句、玩家只发了两个字）。
+ */
+function isInsightAdopted(suggestion: string, sent: string): boolean {
+  const a = normalizeForAdoption(suggestion);
+  const b = normalizeForAdoption(sent);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  return shorter.length >= 4 && shorter.length / longer.length >= 0.6 && longer.includes(shorter);
+}
+
 // Loading 动画（三点跳动）
 function LoadingDots() {
   const [dots, setDots] = useState(0);
@@ -503,13 +523,13 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
     store.setPlayerTurn(false);
     playSend();
 
-    // 明辨铃：玩家若在发送前点击采纳了某条建议、且发送内容与原建议一致，
-    // 则视为"有意的采纳"，随消息上报后端——评估端识别为策略性抵抗（计划A），
-    // 结算端在最坏情况下也保证操控值下降而非上升（计划B 保底）。
+    // 明辨铃：玩家若在发送前点击采纳了某条建议、且发送内容与之相符（归一化后一致或
+    // 互相包含，见 isInsightAdopted），则视为"有意的采纳"，随消息上报后端——
+    // 评估端识别为策略性抵抗（计划A），结算端在最坏情况下也保证操控值下降而非上升（计划B 保底）。
     const adoptedSuggestion = adoptedInsightRef.current;
     adoptedInsightRef.current = null;
     const adoptedInsightChoice =
-      adoptedSuggestion && adoptedSuggestion.text && adoptedSuggestion.text.trim() === text
+      adoptedSuggestion && adoptedSuggestion.text && isInsightAdopted(adoptedSuggestion.text, text)
         ? { text: adoptedSuggestion.text, rationale: adoptedSuggestion.rationale || "" }
         : null;
 
@@ -808,8 +828,10 @@ NPC控制等级：${conversation.npcControlLevel}，
     async (artifact: Artifact) => {
       if (artifact.remainingCooldown > 0 || isWaiting) return;
 
-      // 使用任何法器时清空此前可能存在的"待发送采纳建议"，避免跨法器误报采纳
-      adoptedInsightRef.current = null;
+      // 这里原本会清空"待发送采纳建议"以防跨法器误报，但实测会把
+      // "点了建议 → 又顺手用了个护盾 → 再发送"这种真实采纳一并抹掉，
+      // 导致玩家明明采纳了建议、NPC 控制力却仍然上升。
+      // 采纳与否现在由发送时的文本比对（isInsightAdopted）把关，此处不再清空。
       store.useArtifact(artifact.id);
       setLastUsedArtifact(artifact);
       playArtifact();

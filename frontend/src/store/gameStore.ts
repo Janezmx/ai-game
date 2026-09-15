@@ -195,7 +195,7 @@ export interface GameStore {
   setCurrentLevel: (level: number) => void;  // 从外部设置起始关卡
   nextLevel: () => number;    // 推进到下一关，返回新的关卡数
   resetLevel: () => void;     // 重置所有状态回第一关
-  resetForLevel: (level: number) => void;  // 重置到指定关卡（保留心域）
+  resetForLevel: (level: number) => void;  // 重置到指定关卡（心域血量等一并回到本关初始值）
 
   // 阶段管理
   setPhase: (phase: GamePhase) => void;
@@ -347,21 +347,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }),
 
   resetForLevel: (level: number) => {
-    const s = get();
     set({
       currentLevel: level,
       conversation: createInitialConversation(level),
+      // 心域完全重置：护盾血量、迷雾浓度、法器冷却与装备都回到本关初始值。
+      // 「重新挑战」和「再等等重开」都走这里，必须是一局干净的开局，
+      // 不能沿用上一局残血的护盾。
+      sanctuary: createInitialSanctuary(level),
       repair: createInitialRepair(),
       review: createInitialReview(),
       // 新一局要有新的报告 id，否则会 upsert 覆盖掉上一局的存档
       currentReportId: null,
       currentRoundIndex: 0,
       phase: GamePhase.SanctuaryPrep,
-      // 法器冷却单关计算：重新挑战本关时同样把冷却归零，恢复本关可用次数
-      sanctuary: {
-        ...s.sanctuary,
-        equippedArtifacts: s.sanctuary.equippedArtifacts.map((a) => ({ ...a, remainingCooldown: 0 })),
-      },
       ...freshLevelEducation(),
     });
   },
