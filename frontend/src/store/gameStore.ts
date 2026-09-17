@@ -56,6 +56,24 @@ function sanitizeBestScores(v: unknown): DimensionScores | null {
   return normalizeDimensions(o as Partial<DimensionScores>);
 }
 
+/**
+ * 用当前 ALL_BADGES 的文案刷新存档里的徽章，只沿用其 unlockedAt。
+ *
+ * 为什么需要：badges 是连 name/description 一起持久化的**快照**，一旦关卡改名，
+ * 老玩家的 localStorage 里会一直留着旧文案（关卡改名前的旧徽章名），改名对老存档失效。
+ * 按 id 合并即可让文案跟随版本更新，同时不丢解锁进度。
+ * 已不存在于 ALL_BADGES 的历史徽章原样保留，不做清理（避免误删玩家数据）。
+ */
+function mergeBadgesWithDefaults(saved: Badge[]): Badge[] {
+  const savedById = new Map(saved.map((b) => [b.id, b]));
+  const merged = ALL_BADGES.map((b) => {
+    const prev = savedById.get(b.id);
+    return prev?.unlockedAt ? { ...b, unlockedAt: prev.unlockedAt } : { ...b };
+  });
+  const knownIds = new Set(ALL_BADGES.map((b) => b.id));
+  return [...merged, ...saved.filter((b) => !knownIds.has(b.id))];
+}
+
 function loadPersisted(): PersistedData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -65,7 +83,7 @@ function loadPersisted(): PersistedData {
       masteredKnowledgePointIds: Array.isArray(p.masteredKnowledgePointIds) ? p.masteredKnowledgePointIds : [],
       hasSeenTutorial: !!p.hasSeenTutorial,
       gameHistory: Array.isArray(p.gameHistory) ? p.gameHistory : [],
-      badges: Array.isArray(p.badges) ? p.badges : [],
+      badges: mergeBadgesWithDefaults(Array.isArray(p.badges) ? p.badges : []),
       bestScores: sanitizeBestScores(p.bestScores),
     };
   } catch {
@@ -111,9 +129,50 @@ function createInitialArtifacts(): Artifact[] {
   ];
 }
 
+// ==================== 心域护盾（跨关资源）====================
+/**
+ * 心域护盾是一个**跨关保留**的 0~100 资源，决定每关的开局抵抗值：
+ * - 每打完一局（写入战绩时）按胜负磨损一次：胜利 −5 / 失败 −25；
+ * - 修复阶段按「边界完整性 × 0.2」养回来（见 RepairScreen，上限 100）；
+ * - 不复位：从首页选关、重试、点「下一关」都带着它走，
+ *   否则玩家辛苦养起来的心域会在换关时莫名消失。
+ *
+ * 它只做"惩罚"、不做"加成"——满护盾时的抵抗值就等于旧版各关基准值，
+ * 因此"回首页 / 重试"都无法通过重置刷出超额收益（不存在刷分动机）。
+ *
+ * 磨损与修复的配比（关键，改任一侧都要重新核算）：
+ * 修复加成最高 = 完整性 100 × 0.2 = **+20**，因此
+ * - 胜利 −5：修复一次必定回到 100（赢了不该被惩罚，机制不介入正常推进）；
+ * - 失败 −25：修复后净 −5 左右（完整性 90 → +18），修复只能**减缓**损耗、养不回来。
+ * 若修复系数调回 0.5（最高 +50），失败也能一次回满，护盾将恒定 100、机制失效。
+ */
+const SHIELD_MAX = 100;
+/** 护盾下限：长期不修复也不会无限恶化（护盾 40 时系数 0.7，即最差 −30% 开局抵抗值） */
+const SHIELD_FLOOR = 40;
+/** 一局胜利的磨损量：刻意小于修复加成，保证赢下来就能把心域养满 */
+const SHIELD_WEAR_ON_WIN = 5;
+/** 一局失败的磨损量：必须大于修复加成（+20），否则修复会把失败完全抹平 */
+const SHIELD_WEAR_ON_LOSS = 25;
+/** 护盾不足时的惩罚斜率：护盾每少 1 点，系数 −0.005（即玩家视角 2:1 折算） */
+const SHIELD_LOSS_PENALTY = 0.5;
+
+/**
+ * 心域护盾存量 → 开局抵抗值系数：`1 − 0.5 × (100 − 护盾)/100`。
+ * 满护盾 = 1（各关难度与旧版完全一致）；护盾 90/80/70/60 分别对应 0.95/0.90/0.85/0.80；
+ * 跌到下限 40 时为 0.70（最差情况）。
+ *
+ * 这里只做防御性钳位（lossRatio ∈ [0,1]，因此系数最低 0.5）；
+ * 运行时的真正下限由 SHIELD_FLOOR = 40 保证，即实际最差是 0.70。
+ */
+export function shieldResistanceFactor(shieldHealth: number): number {
+  const lossRatio = Math.max(0, Math.min(1, (SHIELD_MAX - shieldHealth) / SHIELD_MAX));
+  return 1 - SHIELD_LOSS_PENALTY * lossRatio;
+}
+
 function createInitialSanctuary(level = 1): SanctuaryState {
   return {
-    shieldHealth: Math.max(60, 100 - (level - 1) * 10),
+    // 护盾不再随关卡序号递减：它现在由"打了几局、修复了多少"驱动
+    shieldHealth: SHIELD_MAX,
     artifacts: createInitialArtifacts(),
     equippedArtifacts: createInitialArtifacts(), // 默认4件全装备
     fogDensity: (level - 1) * 5,
@@ -130,12 +189,13 @@ const LEVEL_STATS: Record<number, { resistance: number; control: number }> = {
   5: { resistance: 60, control: 70 },
 };
 
-function createInitialConversation(level = 1): ConversationState {
+function createInitialConversation(level = 1, shieldHealth = SHIELD_MAX): ConversationState {
   const stats = LEVEL_STATS[level] || LEVEL_STATS[1];
   return {
     npcName: "",
     messages: [],
-    playerResistance: stats.resistance,
+    // 开局抵抗值 = 本关基准 × 心域护盾系数（满护盾时等于旧版基准值，难度不漂移）
+    playerResistance: Math.round(stats.resistance * shieldResistanceFactor(shieldHealth)),
     npcControlLevel: stats.control,
     isPlayerTurn: false,
     turnCount: 0,
@@ -194,7 +254,7 @@ export interface GameStore {
   totalLevels: number;        // 5
   setCurrentLevel: (level: number) => void;  // 从外部设置起始关卡
   nextLevel: () => number;    // 推进到下一关，返回新的关卡数
-  resetLevel: () => void;     // 重置所有状态回第一关
+  resetLevel: () => void;     // 完整复位：回到第 1 关并把心域护盾养满（「返回首页」与"全部通关后"走这里）
   resetForLevel: (level: number) => void;  // 重置到指定关卡（心域血量等一并回到本关初始值）
 
   // 阶段管理
@@ -217,6 +277,8 @@ export interface GameStore {
   setNpcName: (name: string) => void;
   addMessage: (msg: DialogueMessage) => void;
   updateLastMessage: (chunk: string) => void;
+  /** 移除末尾 N 条消息：重试失败回合时回滚残留（玩家消息 + 空的 NPC 占位），避免重发后出现两条相同消息 */
+  removeLastMessages: (count: number) => void;
   setPlayerResistance: (v: number) => void;
   setNPCAttack: (attack: string) => void;
   setLastMessageEducation: (whyNote: string, tip?: string) => void;
@@ -316,7 +378,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (next > s.totalLevels) return s.totalLevels + 1;
     set({
       currentLevel: next,
-      conversation: createInitialConversation(next),
+      conversation: createInitialConversation(next, s.sanctuary.shieldHealth),
       // 重置 review/复盘，避免累积上一关的对话轮次
       review: createInitialReview(),
       // 新一局要有新的报告 id，否则会 upsert 覆盖掉上一局的存档
@@ -332,6 +394,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return next;
   },
 
+  // 完整复位（「返回首页」/「全部通关后」）：关卡回第 1 关，心域护盾养满。
+  // 与 resetForLevel 的区别就在护盾：那个是"本关重开"，这个是"结束本轮修炼"。
   resetLevel: () =>
     set({
       currentLevel: 1,
@@ -347,13 +411,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }),
 
   resetForLevel: (level: number) => {
-    set({
+    set((s) => ({
       currentLevel: level,
-      conversation: createInitialConversation(level),
-      // 心域完全重置：护盾血量、迷雾浓度、法器冷却与装备都回到本关初始值。
-      // 「重新挑战」和「再等等重开」都走这里，必须是一局干净的开局，
-      // 不能沿用上一局残血的护盾。
-      sanctuary: createInitialSanctuary(level),
+      // 开局抵抗值由"当前持有"的心域护盾算出
+      conversation: createInitialConversation(level, s.sanctuary.shieldHealth),
+      // 「重新挑战」「再等等」「回首页」都走这里：对话、迷雾、法器冷却与装备都回到本关初始值，
+      // 但**心域护盾跨关保留**——它是玩家跨关养起来的存量，不该因为一次重开而清零。
+      sanctuary: { ...createInitialSanctuary(level), shieldHealth: s.sanctuary.shieldHealth },
       repair: createInitialRepair(),
       review: createInitialReview(),
       // 新一局要有新的报告 id，否则会 upsert 覆盖掉上一局的存档
@@ -361,14 +425,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentRoundIndex: 0,
       phase: GamePhase.SanctuaryPrep,
       ...freshLevelEducation(),
-    });
+    }));
   },
 
   setCurrentLevel: (level: number) =>
-    set({
+    set((s) => ({
       currentLevel: level,
-      conversation: createInitialConversation(level),
-      sanctuary: createInitialSanctuary(level),
+      conversation: createInitialConversation(level, s.sanctuary.shieldHealth),
+      // 同上：从首页选关也保留心域护盾，否则"回首页再选关"会把修复成果抹掉
+      sanctuary: { ...createInitialSanctuary(level), shieldHealth: s.sanctuary.shieldHealth },
       repair: createInitialRepair(),
       review: createInitialReview(),
       // 新一局要有新的报告 id，否则会 upsert 覆盖掉上一局的存档
@@ -376,7 +441,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentRoundIndex: 0,
       phase: GamePhase.SanctuaryPrep,
       ...freshLevelEducation(),
-    }),
+    })),
 
   // === 阶段管理 ===
   setPhase: (phase) => set({ phase }),
@@ -474,6 +539,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
       }
       return { conversation: { ...s.conversation, messages: msgs } };
+    }),
+
+  removeLastMessages: (count) =>
+    set((s) => {
+      if (count <= 0) return s;
+      const keep = Math.max(0, s.conversation.messages.length - count);
+      return {
+        conversation: { ...s.conversation, messages: s.conversation.messages.slice(0, keep) },
+      };
     }),
 
   setPlayerResistance: (v) =>
@@ -653,12 +727,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   // === 成长系统 ===
   addGameRecord: (record) => {
-    // 战绩入库同样归一化：成长页雷达图直接吃这份四维，混入小数会画出贴中心的多边形
+    // 战绩入库同样归一化：成长页雷达图直接吃这份四维，混入小数会画出贴中心的多边形。
+    // 同时这里是"一局结束"的唯一单点（复盘完成时写入战绩）：心域边界被这一场对抗磨损一次，
+    // 磨损量按胜负区分——赢了几乎不掉（修复必定养回满），输了才真正打薄心域，
+    // 于是"护盾影响开局抵抗值"只在连败时介入，而不会惩罚正常通关的玩家。
+    const wear = record.victory ? SHIELD_WEAR_ON_WIN : SHIELD_WEAR_ON_LOSS;
     set((s) => ({
       gameHistory: [
         ...s.gameHistory,
         { ...record, dimensions: normalizeDimensions(record.dimensions) },
       ],
+      sanctuary: {
+        ...s.sanctuary,
+        shieldHealth: Math.max(SHIELD_FLOOR, s.sanctuary.shieldHealth - wear),
+      },
     }));
     persist(get);
   },

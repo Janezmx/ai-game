@@ -1,5 +1,14 @@
 import type { DimensionScores, SavedReviewReport } from "@aigame/shared";
 import { normalizeDimensionScore } from "./dimensions";
+import { normalizeLevelTitle, normalizeTrapType } from "./levelTitles";
+import {
+  getRealityTransfer,
+  REALITY_CHECKS_TITLE,
+  REALITY_MISREAD_LABEL,
+  REALITY_TRANSFER_BRANCHES,
+  REALITY_TRANSFER_CLOSING,
+  REALITY_TRANSFER_TITLE,
+} from "./realityTransfer";
 
 /**
  * 复盘报告导出工具
@@ -45,7 +54,9 @@ function fileDate(ts: number): string {
 /** 复盘报告 → Markdown 文本（便于直接分享或存档阅读） */
 export function reportToMarkdown(report: SavedReviewReport): string {
   const lines: string[] = [];
-  lines.push(`# 复盘报告 · 第 ${report.level} 关${report.levelTitle ? ` ${report.levelTitle}` : ""}`);
+  // 存档里的 levelTitle / 知识点手法名都是当时的快照，导出时统一翻译为当前关卡名
+  const levelTitle = normalizeLevelTitle(report.levelTitle);
+  lines.push(`# 复盘报告 · 第 ${report.level} 关${levelTitle ? ` ${levelTitle}` : ""}`);
   lines.push("");
   lines.push(`- 结果：${report.victory ? "✅ 胜利" : "💔 失败"}`);
   lines.push(`- 综合评分：${report.avgScore}`);
@@ -56,7 +67,7 @@ export function reportToMarkdown(report: SavedReviewReport): string {
     lines.push("");
     lines.push("## 📖 本课知识点");
     lines.push("");
-    lines.push(`**${kp.tactic}**：${kp.definition}`);
+    lines.push(`**${normalizeLevelTitle(kp.tactic)}**：${kp.definition}`);
     if (kp.signals?.length) {
       lines.push("");
       lines.push("识别信号：");
@@ -96,7 +107,8 @@ export function reportToMarkdown(report: SavedReviewReport): string {
       lines.push("");
     }
     if (a?.trapType) {
-      lines.push(`**操控手法**：${a.trapType}`);
+      // 同页面口径：旧存档的 trapType 可能仍是改名前的叫法，导出前归一化
+      lines.push(`**操控手法**：${normalizeTrapType(a.trapType)}`);
       lines.push("");
     }
     if (a?.trapAnalysis) {
@@ -142,6 +154,31 @@ export function reportToMarkdown(report: SavedReviewReport): string {
     }
   });
 
+  // 现实迁移校准：与复盘页面共用同一份按关文案（realityTransfer），保证逐字一致。
+  // 逐轮复盘全是"对方在做什么"，这里必须给出等量的"我也可能读错"，
+  // 否则导出件会变成一份单向的"别人都在操控我"的证据。
+  const reality = getRealityTransfer(report.level);
+  lines.push("---");
+  lines.push("");
+  lines.push(`## ${REALITY_TRANSFER_TITLE}`);
+  lines.push("");
+  lines.push(reality.lead);
+  lines.push("");
+  lines.push(`### ${REALITY_MISREAD_LABEL}`);
+  lines.push("");
+  lines.push(reality.misread);
+  lines.push("");
+  lines.push(`### ${REALITY_CHECKS_TITLE}`);
+  lines.push("");
+  reality.checks.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
+  for (const b of REALITY_TRANSFER_BRANCHES) {
+    lines.push("");
+    lines.push(`**${b.label}**：${b.text}`);
+  }
+  lines.push("");
+  for (const line of REALITY_TRANSFER_CLOSING) lines.push(line);
+
+  lines.push("");
   lines.push("---");
   lines.push("");
   lines.push(`共 ${report.rounds.length} 轮对话 · 由「清醒边界」自动存档生成`);
@@ -149,7 +186,7 @@ export function reportToMarkdown(report: SavedReviewReport): string {
 }
 
 function buildFileName(report: SavedReviewReport, ext: string): string {
-  const title = (report.levelTitle || "").replace(/[\\/:*?"<>|\s]/g, "");
+  const title = normalizeLevelTitle(report.levelTitle).replace(/[\\/:*?"<>|\s]/g, "");
   return `复盘报告_第${report.level}关${title ? `_${title}` : ""}_${fileDate(report.timestamp)}.${ext}`;
 }
 

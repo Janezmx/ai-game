@@ -349,11 +349,11 @@ function sse(event, data) {
 
 // NPC 生成层级数据
 const LEVEL_SEEDS = [
-  { id: 1, title: "煤气灯效应", subtitle: "否定感受 · 认知侵蚀", role: "亲密关系中的操控者", tactics: "记忆否认、感受否定、角色反转、事实扭曲、淡化伤害", style: "表面温柔关心，话语中暗含否定", kpId: "kp-gaslight" },
-  { id: 2, title: "职场PUA", subtitle: "能力贬低 · 价值否定", role: "职场中的打压者", tactics: "比较打压、双向束缚、预言失败", style: "表面为了你好，实际在贬低能力", kpId: "kp-pua" },
+  { id: 1, title: "煤气灯操控", subtitle: "否定感受 · 认知侵蚀", role: "亲密关系中的操控者", tactics: "记忆否认、感受否定、角色反转、事实扭曲、淡化伤害", style: "表面温柔关心，话语中暗含否定", kpId: "kp-gaslight" },
+  { id: 2, title: "职场打压", subtitle: "能力贬低 · 价值否定", role: "职场中的打压者", tactics: "比较打压、双向束缚、预言失败", style: "表面为了你好，实际在贬低能力", kpId: "kp-pua" },
   { id: 3, title: "亲情绑架", subtitle: "内疚诱导 · 牺牲叙事", role: "家庭中的情感绑架者", tactics: "三角测量、代际绑架、自我惩罚暗示", style: "强调「我为你好」", kpId: "kp-family" },
-  { id: 4, title: "匿名网络攻击", subtitle: "群体极化 · 去人格化", role: "网络暴力的施暴者", tactics: "人肉威胁、伪造证据、音量压制", style: "以匿名身份躲在屏幕后攻击", kpId: "kp-network" },
-  { id: 5, title: "隐性歧视", subtitle: "微侵犯 · 预设质疑", role: "系统性的偏见者", tactics: "关怀式质疑、双重标准、标签化防御", style: "表面礼貌专业，话语暗含预设", kpId: "kp-bias" },
+  { id: 4, title: "网络围攻", subtitle: "群体极化 · 去人格化", role: "网络暴力的施暴者", tactics: "人肉威胁、伪造证据、音量压制", style: "以匿名身份躲在屏幕后攻击", kpId: "kp-network" },
+  { id: 5, title: "偏见伪装", subtitle: "微侵犯 · 预设质疑", role: "系统性的偏见者", tactics: "关怀式质疑、双重标准、标签化防御", style: "表面礼貌专业，话语暗含预设", kpId: "kp-bias" },
 ];
 
 // 每关难度参数（与 frontend/src/store/gameStore.ts 的 LEVEL_STATS 保持一致）

@@ -22,7 +22,7 @@ interface LevelSeed {
 const LEVEL_SEEDS: LevelSeed[] = [
   {
     id: 1,
-    title: "煤气灯效应",
+    title: "煤气灯操控",
     subtitle: "否定感受 · 认知侵蚀",
     npcRole: "亲密关系中的操控者（如恋人、暧昧对象、密友）",
     scenarios: "迟到/失约、忘记重要承诺、物品丢失、否认说过的话",
@@ -35,7 +35,7 @@ const LEVEL_SEEDS: LevelSeed[] = [
   },
   {
     id: 2,
-    title: "职场PUA",
+    title: "职场打压",
     subtitle: "能力贬低 · 价值否定",
     npcRole: "职场中的打压者（如直属上司、资深同事、客户、HR）",
     scenarios: "方案被当众否定、晋升落选、公开批评、功劳被抢、绩效评估不公",
@@ -61,7 +61,7 @@ const LEVEL_SEEDS: LevelSeed[] = [
   },
   {
     id: 4,
-    title: "匿名网络攻击",
+    title: "网络围攻",
     subtitle: "群体极化 · 去人格化",
     npcRole: "网络暴力的施暴者（如匿名账号群、水军、冒充熟人、键盘侠）",
     scenarios: "评论区争议、照片被恶意传播、谣言四起、被网暴围攻、社交账号被举报",
@@ -74,7 +74,7 @@ const LEVEL_SEEDS: LevelSeed[] = [
   },
   {
     id: 5,
-    title: "隐性歧视",
+    title: "偏见伪装",
     subtitle: "微侵犯 · 预设质疑",
     npcRole: "系统性的偏见者（如面试官、教授、同事、行业前辈、权威人士）",
     scenarios: "求职被质疑能力、晋升被区别对待、项目分配不公、能力被预设低估、被要求证明自己",

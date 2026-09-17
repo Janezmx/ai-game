@@ -572,8 +572,10 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
   const handleDrawComplete = useCallback(
     (integrity: number) => {
       setBoundaryIntegrity(integrity);
-      // 边界完整性影响护盾恢复
-      const shieldRecovery = Math.min(100, sanctuary.shieldHealth + integrity * 0.5);
+      // 边界完整性影响护盾恢复：每 1 点完整性换 0.2 点护盾（完整性 94 → +18.8，最多 +20）。
+      // 系数刻意小于"失败磨损 25"，所以修复只能减缓损耗；而胜利只磨损 5，修一次必定回满。
+      // 与 gameStore 的 SHIELD_WEAR_ON_WIN / SHIELD_WEAR_ON_LOSS 是一组配比，改一处要同步核算。
+      const shieldRecovery = Math.min(100, sanctuary.shieldHealth + integrity * 0.2);
       setShieldHealth(shieldRecovery);
       setStep("breathe");
     },
@@ -635,10 +637,19 @@ export default function RepairScreen({ onComplete, level }: RepairScreenProps) {
           <Animated.View style={styles.completeContainer} entering={FadeIn.duration(500)}>
             <Text style={styles.completeIcon}>✨</Text>
             <Text style={styles.completeTitle}>修复完成</Text>
-            <Text style={styles.completeText}>
-              边界完整性: {Math.round(repair.boundaryIntegrity)}%{"\n"}
-              护盾恢复至: {Math.round(sanctuary.shieldHealth)}%
-            </Text>
+            <View style={styles.completeStats}>
+              <Text style={styles.completeText}>
+                边界完整性: {Math.round(repair.boundaryIntegrity)}%{"\n"}
+                护盾恢复至: {Math.round(sanctuary.shieldHealth)}%
+              </Text>
+              {/* 失败磨损 25、修复最多 +20，所以输过的局护盾养不满。
+                  不解释一句，"护盾恢复至 87%" 会被读成数值 bug。 */}
+              {sanctuary.shieldHealth < 99 && (
+                <Text style={styles.completeHint}>
+                  这一次心域没能完全养回。失败会磨损得更多，下一次赢回来就能养满。
+                </Text>
+              )}
+            </View>
 
             {/* 教育回顾卡片 */}
             <View style={styles.eduReviewCard}>
@@ -920,12 +931,25 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
     fontFamily,
   },
+  /** 修复结果两行数字 + 可选说明的容器：间距统一在这里控制，方便插入说明行 */
+  completeStats: {
+    alignItems: "center",
+    marginBottom: space.lg,
+  },
   completeText: {
     color: palette.textSoft,
     fontSize: fontSize.body,
     textAlign: "center",
     lineHeight: 26,
-    marginBottom: space.lg,
+    fontFamily,
+  },
+  /** 护盾没养满时的原因说明（输过的局）：浅色小字，不夺走数字行的注意力 */
+  completeHint: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: space.sm,
     fontFamily,
   },
   completeBtn: {

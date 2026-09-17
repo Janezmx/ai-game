@@ -26,7 +26,7 @@ const NPC_PERSONA_TEMPLATE = `你是一位精于心理操控的AI NPC，名为�
 ## 难度递进策略（按当前回合数动态调整）
 - 第 1-3 轮：使用**明显可识别**的操控手法。话术中包含清晰线索——直接否定感受、明显偷换概念、露骨的道德绑架，让新手玩家能较容易识别。
 - 第 4-7 轮：升级为**复合手法**。将 2 种操控混合使用（如角色反转+淡化伤害），增加话术复杂度，但仍留有可识别线索。
-- 第 8-10 轮：使用**最隐蔽的微侵犯手法**。话术精炼、表面"讲理"、以退为进，考验玩家高级识别能力。如果本关是第 5 关"隐性歧视"，此阶段重点使用"关怀式质疑""预设局限"等极隐蔽手法。
+- 第 8-10 轮：使用**最隐蔽的微侵犯手法**。话术精炼、表面"讲理"、以退为进，考验玩家高级识别能力。如果本关是第 5 关"偏见伪装"，此阶段重点使用"关怀式质疑""预设局限"等极隐蔽手法。
 
 ## 课前知识点信号（玩家本轮正在学习的识别线索，仅用于话术风格参考）
 {knowledgeSignals}
@@ -34,7 +34,6 @@ const NPC_PERSONA_TEMPLATE = `你是一位精于心理操控的AI NPC，名为�
 **信号使用边界**：以上信号只是操控手法风格的参考。你只能在**当前唯一场景（开场白确立的那件事）**中自然体现信号所描述的情绪操控，不得为了"触发某条信号"而凭空引入场景外的新事件、新人物或新话题（例如当前场景在谈职业选择，就不得突然提到家人催婚、借钱、生病、回家探望等与当前事件无关的内容）。
 
 ## 心域状态
-- 护盾强度：{shieldHealth}/100
 - 迷雾密度：{fogDensity}/100
 
 ## 当前回合
@@ -47,7 +46,7 @@ const ASSESSMENT_INSTRUCTION_TEMPLATE = `## 回合评估指令（分析与分数
 只输出一个合法 JSON 对象，评估玩家对「NPC上一句话术」的回应。禁止任何 JSON 之外的文字/代码块/首尾解释（整条回复首字符 {、尾字符 }）：
 
 {
-  "trapType": "操控手法类型，如：煤气灯效应、情感绑架、贬低边界、模糊逻辑、身份否定",
+  "trapType": "操控手法类型，如：煤气灯操控、情感绑架、贬低边界、模糊逻辑、身份否定",
   "trapAnalysis": "一两句话点破 NPC 刚才这套话术背后的动机或操控目的",
   "playerStatus": "effective|shaken|trapped（有效防御/轻度动摇/落入陷阱）",
   "dimensions": {"boundaryAwareness":0-100,"emotionalStability":0-100,"cognitiveClarity":0-100,"assertiveResponse":0-100},
@@ -61,7 +60,7 @@ const ASSESSMENT_INSTRUCTION_TEMPLATE = `## 回合评估指令（分析与分数
 
 说明：
 - 【强制全中文】assessment、trapAnalysis、whyNote、identificationTip、progressNote 与 alternatives 的 text/rationale 一律使用简体中文，严禁输出任何英文单词或 JSON 字段名（如 boundaryAwareness、emotionalStability、cognitiveClarity、assertiveResponse）；提及四维评分一律用中文名：边界意识、情绪稳定、认知清晰、坚定回应。
-- dimensions 沿用旧逻辑：坚定回应（assertiveResponse）主导控制力结算，其余维度影响护盾/迷雾，请给真实、有区分度的评分。
+- dimensions 影响结算（双维加权，主维 0.6 + 辅维 0.4）：**抵抗值损耗**由「边界意识（主）＋情绪稳定（辅）」决定；**NPC 控制力变化**由「坚定回应（主）＋认知清晰（辅）」决定。四个维度都会实际影响战局，必须给出真实、有区分度的评分，不要四维同分。
 - progressNote：仅当上下文提供了「上一轮四维评分」时才写数字对比；没有该评分（含本关第一轮）时必须原样输出"首轮评估"，不得编造对比内容或出现"相比/上一轮/提升"字样。
 - 各文本字段要求口语化、精炼（每段 20~60 汉字），避免套话。
 - NPC 台词已由独立的台词生成步骤先行产出并推送，此处只评估玩家回应，严禁输出任何台词/nextDialogue。`;
@@ -199,6 +198,11 @@ interface SessionData {
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   npcName: string;
   fogDensity: number;
+  /**
+   * 心域护盾（元层面，来自备战页 sanctuary.shieldHealth）。
+   * 只用于会话状态对齐，**不参与对抗结算，也不再注入提示词**——
+   * 对抗中的血量是 playerResistance，两者一度都被叫"护盾"，是命名混淆的源头。
+   */
   shieldHealth: number;
   turnCount: number;
   playerResistance: number;
@@ -501,10 +505,10 @@ export async function POST(request: NextRequest) {
       .replace("{sceneLockLine}", sceneLockLine)
       .replace("{identityLockLine}", identityLockLine)
       .replace("{knowledgeSignals}", knowledgeSignals)
-      .replace("{shieldHealth}", String(session.shieldHealth))
-      .replace("{fogDensity}", String(session.fogDensity))
+      .replace("{fogDensity}", String(Math.round(session.fogDensity)))
       .replace("{turnCount}", String(session.turnCount))
-      .replace("{playerResistance}", String(session.playerResistance))
+      // 抵抗值经多轮加权结算后是小数（如 92.19999999），注入前取整，避免模型读到浮点噪声
+      .replace("{playerResistance}", String(Math.round(session.playerResistance)))
       .replace("{npcControlLevel}", String(session.npcControlLevel));
 
     const assessmentPrompt = ASSESSMENT_INSTRUCTION_TEMPLATE;
@@ -575,6 +579,11 @@ export async function POST(request: NextRequest) {
         // reasoning 较久时也会把正在生成的评估掐断；放宽到 30s 容纳"思考+输出"。
         // 失败后仍交给外层候选模型（主→备）或本地兜底，不会无限拖住玩家。
         const ASSESS_TIMEOUT_MS = 30000;
+        // 降级前重试（见下方 retryBeforeDegrade）：只在"已判定要走兜底"时才触发，正常回合零成本。
+        // 单次超时压到 15s（主路径是 30s）——重试是补救动作，不该把回合尾部的等待再拉长一倍。
+        const ASSESS_RETRY_TIMEOUT_MS = 15000;
+        // 回合尾部耗时预算：超过它就不再重试，直接走兜底。宁可少一次补救，也不让玩家干等。
+        const TURN_LATENCY_BUDGET_MS = 45000;
         // 台词段重试策略：每个候选（主→备）内部最多尝试 2 次；单次显式超时 45s
         //（doRequest 默认 90s 在偶发空返回时会拖住台词上屏的关键路径）；成功门槛
         // 要求内容 ≥ DIALOGUE_MIN_LEN，避免空返回 / 极短废话被当成成功回复。
@@ -697,14 +706,15 @@ export async function POST(request: NextRequest) {
           // 会把"正在评估分数..."拖到数十秒；失败后交给外层候选模型（主→备）或本地兜底。
           const requestWithRetry = async (
             cfg: { model: string; baseUrl: string; apiKey: string; disableThinking?: boolean },
-            label: string
+            label: string,
+            timeoutMs: number = ASSESS_TIMEOUT_MS
           ): Promise<{ status: number; content: string; ttftMs: number; totalMs: number }> => {
             let lastErr: any = null;
             for (let attempt = 0; attempt < 1; attempt++) {
               try {
-                let r = await doRequest(true, cfg, undefined, undefined, ASSESS_MAX_TOKENS, ASSESS_TIMEOUT_MS);
+                let r = await doRequest(true, cfg, undefined, undefined, ASSESS_MAX_TOKENS, timeoutMs);
                 if (r.status === 400) {
-                  r = await doRequest(false, cfg, undefined, undefined, ASSESS_MAX_TOKENS, ASSESS_TIMEOUT_MS);
+                  r = await doRequest(false, cfg, undefined, undefined, ASSESS_MAX_TOKENS, timeoutMs);
                 }
                 if (r.status === 200) {
                   console.log(
@@ -1034,41 +1044,128 @@ export async function POST(request: NextRequest) {
               ? session.assessments[session.assessments.length - 1]
               : null;
 
-          if (!assessment) {
-            // 解析彻底失败且内容非空时，自动重试一次完整请求（DeepSeek 偶发畸形/截断）
-            if (fullContent.trim().length >= 30 && !retried) {
-              retried = true;
-              console.warn("[chat] JSON 解析失败，自动重试一次请求。原 len:", fullContent.length);
-              const retryResp2 = await doRequest(true, undefined, undefined, undefined, ASSESS_MAX_TOKENS, ASSESS_TIMEOUT_MS);
-              if (retryResp2.status === 200 && retryResp2.content.trim().length >= 30) {
-                fullContent = retryResp2.content;
-                const retryClean = fullContent.replace(/```json\s*|```/g, "").trim();
-                let rc = retryClean;
-                const rfb = rc.indexOf("{");
-                const rlb = rc.lastIndexOf("}");
-                if (rfb !== -1 && rlb !== -1 && rlb > rfb) rc = rc.slice(rfb, rlb + 1);
-                // 对重试内容依次尝试核心解析策略
-                const retryAttempts = [
-                  () => JSON.parse(rc),
-                  () => JSON.parse(rc.replace(/\\(?!["\\/bfnrtu])/g, "")),
-                  () => tryParseWithFullwidthColonRepair(rc),
-                  () => tryParseWithDialogueRepair(rc),
-                  () => tryParseTruncatedJson(rc),
-                  () => tryParseTruncatedJson(retryClean),
-                ];
-                for (const fn of retryAttempts) {
-                  try {
-                    const r = fn();
-                    if (r && typeof r === "object") {
-                      assessment = r;
-                      console.log("[chat] 重试解析成功。len:", fullContent.length);
-                      break;
-                    }
-                  } catch {}
+          /**
+           * 解析降级前重试的返回内容：复用宽松解析链，并补一次"不裁花括号的截断恢复"
+           *（旧的解析失败重试路径里有这一步，保留以免能力倒退）。
+           */
+          const parseRetryContent = (content: string): any => {
+            const loose = parseAssessmentLoose(content);
+            if (loose) return loose;
+            const clean = String(content || "")
+              .replace(/```(?:json|JSON)\s*/g, "")
+              .replace(/```/g, "")
+              .trim();
+            return tryParseTruncatedJson(clean);
+          };
+
+          /**
+           * 取出四维并校验：四个维度都必须是有限数字；rejectPlaceholder 时还要求不是
+           * "全等且为 0/50"的占位值。返回 null 表示这次结果仍不可用，继续尝试下一个候选。
+           */
+          const pickValidDims = (
+            parsed: any,
+            rejectPlaceholder: boolean
+          ): Record<string, number> | null => {
+            const rd = parsed?.dimensions;
+            if (!rd || typeof rd !== "object") return null;
+            const dims: Record<string, number> = {};
+            for (const k of DIMENSION_KEYS) dims[k] = toPercentScore(rd[k], NaN);
+            if (DIMENSION_KEYS.some((k) => !Number.isFinite(dims[k]))) return null;
+            if (rejectPlaceholder && isPlaceholderDimensions(dims)) return null;
+            return dims;
+          };
+
+          /**
+           * 降级前重试：**只在已经判定要走兜底时**调用
+           *（解析彻底失败 / 四维字段缺失或非法 / 四维为占位值）。
+           *
+           * 为什么这么改：这三类失败其实都是"模型评估了，只是格式或字段没对上"，换一个候选模型
+           * 重问一次通常就能拿到。旧实现里解析失败的重试用的是 `doRequest(true, undefined, …)`，
+           * 会落到主模型且**没关思考**（见 doRequest 的 cfg?.model ?? model），
+           * 配置比首轮（评估专用非推理模型 + 关思考）更弱，等于拿最容易复现同类失败的方式去补救。
+           * 这里统一改为依次遍历 evalCandidates（评估专用 → 主 → 备用）。
+           *
+           * 两道刹车，避免"补救"把回合拖长：
+           *   ① 预算：整个回合最多重试 1 次（retried 标志），防止解析/字段/占位三类重试串联；
+           *   ② 耗时：回合尾部已超过 TURN_LATENCY_BUDGET_MS 就直接放弃，宁可少一次补救。
+           */
+          const retryBeforeDegrade = async (
+            reason: string,
+            instruction: string,
+            rejectPlaceholder: boolean
+          ): Promise<{ ok: boolean; content: string }> => {
+            if (retried) {
+              console.warn(`[chat] 降级前重试跳过（本回合已用过重试预算）：${reason}`);
+              return { ok: false, content: "" };
+            }
+            const elapsed = Date.now() - turnStartAt;
+            if (elapsed > TURN_LATENCY_BUDGET_MS) {
+              console.warn(
+                `[chat] 降级前重试跳过（回合尾部已耗时 ${elapsed}ms，超出 ${TURN_LATENCY_BUDGET_MS}ms 预算）：${reason}`
+              );
+              return { ok: false, content: "" };
+            }
+            retried = true;
+            console.warn(`[chat] 降级前重试（${reason}）：依次尝试评估候选模型`);
+            messages.push({ role: "system", content: instruction });
+            let lastContent = "";
+            try {
+              for (const cand of evalCandidates) {
+                try {
+                  const rr = await requestWithRetry(
+                    cand,
+                    `降级前重试 ${cand.model}`,
+                    ASSESS_RETRY_TIMEOUT_MS
+                  );
+                  if (rr.status !== 200 || rr.content.trim().length < 30) {
+                    console.warn(
+                      `[chat] 降级前重试（${cand.model}）内容不可用：status=${rr.status} len=${rr.content?.length ?? 0}`
+                    );
+                    continue;
+                  }
+                  lastContent = rr.content;
+                  const parsed = parseRetryContent(rr.content);
+                  const dims = parsed ? pickValidDims(parsed, rejectPlaceholder) : null;
+                  if (!parsed || !dims) {
+                    console.warn(`[chat] 降级前重试（${cand.model}）仍拿不到有效四维，尝试下一个候选`);
+                    continue;
+                  }
+                  // 拿到有效结果：整体覆盖文本字段；nextDialogue 已随第一段台词推送，丢弃避免覆盖
+                  const rest: any = { ...parsed };
+                  delete rest.nextDialogue;
+                  assessment = { ...(assessment || {}), ...rest, dimensions: dims, degraded: false };
+                  console.log(
+                    `[chat] 降级前重试成功（${cand.model}）原因=${reason} 四维=${JSON.stringify(dims)}`
+                  );
+                  return { ok: true, content: rr.content };
+                } catch (e) {
+                  console.warn(`[chat] 降级前重试（${cand.model}）异常：`, (e as any)?.message);
                 }
               }
+              console.warn(`[chat] 降级前重试全部候选均失败：${reason}，转本地兜底`);
+              return { ok: false, content: lastContent };
+            } finally {
+              messages.pop(); // 移除本次追加的重试指令，避免污染后续会话上下文
             }
+          };
 
+          if (!assessment) {
+            // 解析彻底失败：先走"降级前重试"（遍历评估候选，含关思考的非推理模型）。
+            // 旧的这段实现有两个问题，本次一并修掉：
+            //   ① 重试用的是 doRequest(true, undefined, …) → 落到主模型且没关思考，配置比首轮更弱；
+            //   ② 重试解析出的结果**紧接着被下面的兜底对象无条件覆盖**，等于白等一次请求。
+            const r = await retryBeforeDegrade(
+              "JSON 解析彻底失败",
+              "你上一次的输出无法被解析为合法 JSON。请重新输出完整且合法的 JSON 对象，" +
+                "只输出 JSON 本身（首字符 {、尾字符 }），不要任何解释、不要代码块标记。",
+              false
+            );
+            // 保留旧行为：重试返回了可用长度的内容时，用它的原文做下面的字段兜底提取
+            if (!r.ok && r.content.trim().length >= 30) fullContent = r.content;
+          }
+
+          // 重试成功时 assessment 已有值，这里必须再判一次：否则兜底对象会把重试结果覆盖掉
+          if (!assessment) {
             // 即使整体 JSON 解析失败，也尽量从原文里把 whyNote / identificationTip 等科普字段
             // 单独提取出来（用宽松正则），避免科普点评显示生硬的占位文案。
             // 注：台词已由第一段独立生成，此处不再负责提取 nextDialogue。
@@ -1113,68 +1210,55 @@ export async function POST(request: NextRequest) {
           // 6.5 dimensions 运行时兜底：模型可能输出合法 JSON 却漏掉/写错该键，成功解析分支不会触发上面
           //    的 fallback；若不补齐，推给前端后会在结算读取 a.dimensions.boundaryAwareness 时抛 undefined
           const rawDims: any = assessment.dimensions;
-          if (!rawDims || typeof rawDims !== "object") {
-            assessment.dimensions = { boundaryAwareness: 50, emotionalStability: 50, cognitiveClarity: 50, assertiveResponse: 50 } as any;
-            assessment.degraded = true;
-          } else {
-            for (const k of ["boundaryAwareness", "emotionalStability", "cognitiveClarity", "assertiveResponse"]) {
-              // 缺失/非法维度补成 50 是"假分"：标记 degraded，禁止当作真实成绩参与对比与结算
-              if (typeof rawDims[k] !== "number" || !Number.isFinite(rawDims[k])) {
-                assessment.degraded = true;
-              }
-              rawDims[k] = toPercentScore(rawDims[k], 50);
+          let dimsInvalid = !rawDims || typeof rawDims !== "object";
+          if (!dimsInvalid) {
+            for (const k of DIMENSION_KEYS) {
+              if (typeof rawDims[k] !== "number" || !Number.isFinite(rawDims[k])) dimsInvalid = true;
             }
+          }
+          if (dimsInvalid) {
+            // 降级前重试：这种情况模型其实给出了合法 JSON，只是四维字段缺失/写错，
+            // 换一个候选模型重问一次通常能拿到（旧实现这里直接判 degraded，没有重试机会）。
+            const r = await retryBeforeDegrade(
+              "四维字段缺失或非法",
+              "你上一次的输出缺少有效的四维评分。请重新输出完整 JSON：dimensions 必须包含 " +
+                "boundaryAwareness / emotionalStability / cognitiveClarity / assertiveResponse " +
+                "四个 0-100 的整数分，且不要整组相同。只输出 JSON，不要任何解释。",
+              false
+            );
+            if (!r.ok) {
+              // 缺失/非法维度补成 50 是"假分"：标记 degraded，禁止当作真实成绩参与对比与结算。
+              // 能取到的维度照旧保留，只把无效的那个补成 50（与旧行为一致，避免整组被拉平）。
+              const filled: Record<string, number> = {};
+              for (const k of DIMENSION_KEYS) filled[k] = toPercentScore(rawDims?.[k], 50);
+              assessment.dimensions = filled as any;
+              assessment.degraded = true;
+            }
+          } else {
+            for (const k of DIMENSION_KEYS) rawDims[k] = toPercentScore(rawDims[k], 50);
           }
 
           // 6.5.1 占位评分重试：模型偶发不真正评估，整组直接吐 0/0/0/0 或 50/50/50/50
           //      （实测事故：某局第 2 轮四维全 0、第 3 轮四维全 50，本局综合分被从 80+
           //       拉到 58）。这类值是合法有限数字，6.5 的"必须是数字"校验拦不住，会被当成
           //       真实成绩写进 dimensionHistory、计入本局均分与历史最高分。
-          //       命中时补一句强约束重问一次（只试首选评估模型，避免拖慢回合尾部关键路径）；
+          //       命中时补一句强约束重问一次。旧实现只试首选评估模型
+          //      （evalCandidates.slice(0, 1)）——评估模型自己排队/超时就只能认输；
+          //       现在走统一的降级前重试，会依次尝试主模型与备用模型。
           //       仍拿不到真实评分则标 degraded，交给既有兜底（不计分、复盘不生成对比文案）。
           if (!assessment.degraded && isPlaceholderDimensions(assessment.dimensions)) {
             console.warn(
-              "[chat] 检测到占位评分（四维全等且为 0/50），重试评估一次。原值:",
+              "[chat] 检测到占位评分（四维全等且为 0/50），触发降级前重试。原值:",
               JSON.stringify(assessment.dimensions)
             );
-            messages.push({
-              role: "system",
-              content:
-                "你上一次输出的四维评分整组等于 0 或 50，属于未真正评估的占位值，判定为无效。" +
+            const r = await retryBeforeDegrade(
+              "四维为占位值（全等且为 0/50）",
+              "你上一次输出的四维评分整组等于 0 或 50，属于未真正评估的占位值，判定为无效。" +
                 "请依据玩家回应的真实表现重新评估：四个维度分别给出互不相同的 0-100 整数分，" +
                 "禁止整组相同，禁止用 0 或 50 填充。只输出完整 JSON，不要任何解释。",
-            });
-            for (const cand of evalCandidates.slice(0, 1)) {
-              try {
-                const rr = await requestWithRetry(cand, `评估占位重试 ${cand.model}`);
-                const reparsed = rr.status === 200 ? parseAssessmentLoose(rr.content) : null;
-                const rd = reparsed?.dimensions;
-                if (!rd || typeof rd !== "object") {
-                  console.warn(`[chat] 评估占位重试（${cand.model}）未取到 dimensions，保留原评分`);
-                  continue;
-                }
-                for (const k of DIMENSION_KEYS) {
-                  rd[k] = toPercentScore(rd[k], NaN);
-                }
-                if (DIMENSION_KEYS.some((k) => !Number.isFinite(rd[k]))) continue;
-                if (isPlaceholderDimensions(rd)) {
-                  console.warn(`[chat] 评估占位重试（${cand.model}）仍为占位评分:`, JSON.stringify(rd));
-                  continue;
-                }
-                // 拿到真实评分：整体覆盖数值与文本字段；nextDialogue 已随台词段推送，丢弃
-                const rest: any = { ...reparsed };
-                delete rest.nextDialogue;
-                assessment = { ...assessment, ...rest, dimensions: rd, degraded: false };
-                console.log(`[chat] 评估占位重试成功（${cand.model}）:`, JSON.stringify(rd));
-                break;
-              } catch (e) {
-                console.warn(`[chat] 评估占位重试异常（${cand.model}）:`, (e as any)?.message);
-              }
-            }
-            messages.pop(); // 移除本次追加的重试指令，避免污染后续会话上下文
-            if (isPlaceholderDimensions(assessment.dimensions)) {
-              assessment.degraded = true;
-            }
+              true
+            );
+            if (!r.ok) assessment.degraded = true;
           }
           // 6.6 trapType/playerStatus 运行时兜底：复盘界面直接渲染这两字段并执行
           //     getTrapEmoji(trapType).includes(...)，模型漏键时 undefined 会让复盘/修复界面白屏
@@ -1227,12 +1311,21 @@ export async function POST(request: NextRequest) {
           const dialogueText = dialogueFull || "……（沉默片刻）你继续说，我在听。";
 
           // 10. 计算状态变化（先计算，后发送，确保后端是单一事实源）
+          // 四维双通道结算（主维 0.6 + 辅维 0.4）：
+          //   抵抗值损耗 = 10 − (0.6×边界意识 + 0.4×情绪稳定) / 10   → 情绪一慌，护盾掉得更快
+          //   控制力削减 = (50 − (0.6×坚定回应 + 0.4×认知清晰)) / 5  → 看得越清，砍得越狠
+          // 极值行为与"单维时代"完全一致（全 100 → 抵抗 −0 / 控制 −10；全 0 → 抵抗 −10 / 控制 +10），
+          // 中位数玩家（四维≈50）的收益不变，因此各关初始值 LEVEL_STATS 无需重新平衡。
+          let effBoundary = 0;
+          let effAssertive = 0;
           let dim = assessment.dimensions;
           if (dim) {
-            const resistDelta = 10 - dim.boundaryAwareness / 10;
+            effBoundary = 0.6 * dim.boundaryAwareness + 0.4 * dim.emotionalStability;
+            effAssertive = 0.6 * dim.assertiveResponse + 0.4 * dim.cognitiveClarity;
+            const resistDelta = 10 - effBoundary / 10;
             // 单轮 NPC 操控变化幅度钳位到 ±15，防止 LLM 输出异常评分（如边界值/缺失）时出现跳变，
             // 导致玩家一句话就把 NPC 操控打归零而提前胜利。
-            const rawControlDelta = (50 - dim.assertiveResponse) / 5;
+            const rawControlDelta = (50 - effAssertive) / 5;
             let controlDelta = Math.max(-15, Math.min(15, rawControlDelta || 0));
             // 明辨铃保底（计划B）：即使评估模型对采纳建议的回应仍给偏低分（最不利情况），
             // 玩家郑重采纳建议也应确定性地换取至少 6 点的 NPC 操控下降，绝不让操控值上升——
@@ -1295,7 +1388,9 @@ export async function POST(request: NextRequest) {
               `playerStatus=${assessment.playerStatus} ` +
               `whyNote=${assessment.whyNote ? assessment.whyNote.length + "字" : "空"} ` +
               `identificationTip=${assessment.identificationTip ? assessment.identificationTip.length + "字" : "空"} ` +
-              `dimensions=${assessment.dimensions ? JSON.stringify(assessment.dimensions) : "空"}`
+              `dimensions=${assessment.dimensions ? JSON.stringify(assessment.dimensions) : "空"} ` +
+              // 双通道结算的两个"等效分"：线上排查"某维是否真的参与了结算"看这两个值
+              `结算等效分 边界=${effBoundary.toFixed(1)} 坚定=${effAssertive.toFixed(1)}`
           );
           controller.close();
         } catch (err: any) {

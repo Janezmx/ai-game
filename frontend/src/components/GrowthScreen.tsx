@@ -32,6 +32,7 @@ import {
   hasAnyScore,
   normalizeDimensions,
 } from "../utils/dimensions";
+import { normalizeLevelTitle } from "../utils/levelTitles";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CHART_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
@@ -370,6 +371,10 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
               ) : (
                 <Text style={styles.emptyText}>完成一局对战并保存记录后，这里会生成你的四维能力雷达图</Text>
               )}
+              {/* 长期口径提醒：四维里"坚定回应"越高越好，容易被误读成"现实中越强硬越好" */}
+              <Text style={styles.calibrationHint}>
+                🧭 坚定回应不是越硬越好。清晰的边界，通常听起来是平静的。
+              </Text>
             </View>
 
             {/* 趋势折线图 */}
@@ -398,7 +403,10 @@ export default function GrowthScreen({ onBack }: { onBack: () => void }) {
                       {record.victory ? "✅ 胜利" : "💔 失败"}
                     </Text>
                   </View>
-                  <Text style={styles.recordTitle}>{record.levelTitle}</Text>
+                  {/* levelTitle 是存档快照：关卡改名后老记录仍是旧名，展示时统一翻译为当前名 */}
+                  <Text style={styles.recordTitle}>
+                    {normalizeLevelTitle(record.levelTitle)}
+                  </Text>
                   <View style={styles.recordFooter}>
                     <Text style={styles.recordScore}>综合评分: {record.avgScore}</Text>
                     {reportId && (
@@ -598,6 +606,15 @@ const styles = StyleSheet.create({
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendDash: { width: 14, height: 0, borderTopWidth: 1.5, borderStyle: "dashed", borderColor: palette.textFaint },
   legendHint: { color: palette.textFaint, fontSize: 12, textAlign: "center", marginTop: space.xs, fontFamily },
+  /** 四维雷达的口径提醒：与图例说明同层级，但用 sage 区分"这是态度说明，不是操作提示" */
+  calibrationHint: {
+    color: palette.sage,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    marginTop: space.sm,
+    fontFamily,
+  },
   recordCard: {
     backgroundColor: palette.surface,
     borderRadius: radius.md,

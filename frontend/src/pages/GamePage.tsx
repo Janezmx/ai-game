@@ -21,7 +21,7 @@ import {
 
 export default function GamePage() {
   const navigate = useNavigate();
-  const { phase, setPhase, currentLevel, totalLevels, nextLevel, resetForLevel } = useGameStore();
+  const { phase, setPhase, currentLevel, totalLevels, nextLevel, resetForLevel, resetLevel } = useGameStore();
   const [showLevelTransition, setShowLevelTransition] = useState(false);
   const [lastVictory, setLastVictory] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -117,7 +117,8 @@ export default function GamePage() {
 
   const handleRetryLevel = useCallback(() => {
     setShowRetryModal(false);
-    // 重置到当前关卡（心域血量等全部回到本关初始值），回到准备阶段后即可重新挑战
+    // 重置到当前关卡：对话、迷雾、法器都回到本关初始值，
+    // 但**心域护盾保留**（它是跨关养成的存量，一次重试不该把它清零）
     resetForLevel(currentLevel);
   }, [resetForLevel, currentLevel]);
 
@@ -132,10 +133,10 @@ export default function GamePage() {
         setPhase(GamePhase.SanctuaryPrep);
       }, 2500);
     } else {
-      // 所有关卡通关，回到主页
-      resetForLevel(1);
+      // 所有关卡通关：等同"回到首页"，心域一并复位（护盾回满）
+      resetLevel();
     }
-  }, [nextLevel, totalLevels, resetForLevel, setPhase]);
+  }, [nextLevel, totalLevels, resetLevel, setPhase]);
 
   const renderPhase = () => {
     switch (phase) {
@@ -198,7 +199,8 @@ export default function GamePage() {
                 style={[styles.modalConfirmBtn, { backgroundColor: palette.clay }]}
                 onPress={() => {
                   setShowHomeModal(false);
-                  resetForLevel(1);
+                  // 心域复位不在这里做：统一由首页挂载时执行（HomePage 的 resetLevel），
+                  // 否则"游戏页返回"与"从成长记录返回"会得到两种心域状态。
                   navigate("/");
                 }}
                 accessibilityLabel="确认返回首页"

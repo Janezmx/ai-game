@@ -11,6 +11,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGameStore } from "../store/gameStore";
 import { NPCResponseAssessment, SavedReviewReport } from "@aigame/shared";
 import { fetchReviewComplete } from "../api/sse";
+import { normalizeLevelTitle, normalizeTrapType } from "../utils/levelTitles";
+import {
+  getRealityTransfer,
+  REALITY_CHECKS_TITLE,
+  REALITY_MISREAD_LABEL,
+  REALITY_TRANSFER_BRANCHES,
+  REALITY_TRANSFER_CLOSING,
+  REALITY_TRANSFER_TITLE,
+} from "../utils/realityTransfer";
 import {
   palette,
   radius,
@@ -45,13 +54,16 @@ function getTrapEmoji(type?: string): string {
   // 兜底：后端评估偶发漏掉 trapType（输出合法 JSON 但键缺失），未归一化时 type 为
   // undefined，走到 type.includes 会抛异常导致复盘/修复界面整页白屏
   const safe = (type || "").trim();
+  // 用"关键词包含"匹配 trapType，因此这里只需覆盖各关主题的代表词。
+  // 旧存档里的 trapType 仍可能是改名前的写法（以"职场""歧视"开头的老关卡名），
+  // 所以保留"职场""歧视"这类宽口径键，改名不会让历史报告丢图标。
   const idMap: Record<string, string> = {
     "煤气灯": "kp-gaslight",
-    "职场PUA": "kp-pua",
     "职场": "kp-pua",
     "亲情": "kp-family",
     "网络": "kp-network",
     "歧视": "kp-bias",
+    "偏见": "kp-bias",
   };
   for (const [key, kpId] of Object.entries(idMap)) {
     if (safe.includes(key)) return TRAP_EMOJI_MAP[kpId] || "🎯";
@@ -68,7 +80,7 @@ function getAdvice(playerStatus: string): string {
     case "trapped":
       return "你落入了操控陷阱，深呼吸，重新审视对方的逻辑漏洞。";
     default:
-      return "保持警惕，注意识别操控手法。";
+      return "留意是不是操控，也留意这一次可能只是普通的情绪。";
   }
 }
 
@@ -144,9 +156,16 @@ export default function ReviewScreen({
   // 等于把本关历史最高分当成「本局成绩」，赢了不涨、输了也不回落。
   const sessionScores = averageDimensions(dimensionHistory) || bestScores;
 
+  // 现实迁移文案按关卡取本关版本（引言 / 最易误读 / 三个问题），钳位兜底在 getRealityTransfer 内
+  const reality = getRealityTransfer(level);
+
   const fallbackKp = getLevelKnowledgePoint(level);
+  // 历史存档里的知识点是快照，tactic 可能是关卡改名前的旧名 → 展示层归一化
+  const snapshotKp = report?.knowledgePoint
+    ? { ...report.knowledgePoint, tactic: normalizeLevelTitle(report.knowledgePoint.tactic) }
+    : null;
   const knowledgePoint = readOnly
-    ? report?.knowledgePoint || fallbackKp
+    ? snapshotKp || fallbackKp
     : currentKnowledgePoint || fallbackKp;
 
   // 仅胜利时才标记该知识点为已掌握。
@@ -307,6 +326,10 @@ export default function ReviewScreen({
                 ? "你需要更多的练习来识别心理操控。记住：操控者通常会否定你的感受、扭曲事实。相信自己的判断。"
                 : "心理操控往往难以识别，建议从最基础的边界意识开始练习：当对方让你感到困惑或愧疚时，停下来想一想。"}
             </Text>
+            {/* 分数说明：综合分只衡量"熟练度"，避免被读成"现实里该用同样强度沟通" */}
+            <Text style={styles.conclusionCalibration}>
+              分数代表你识别与回应的熟练度，不代表现实里要用同样的强度对待每个人。
+            </Text>
           </View>
         )}
 
@@ -360,7 +383,8 @@ export default function ReviewScreen({
                 <View style={styles.trapRow}>
                   <Text style={styles.trapTag}>
                     {getTrapEmoji(round.assessment.trapType)}{" "}
-                    {round.assessment.trapType || "未知操控"}
+                    {/* trapType 也是存档快照：旧报告里可能记着改名前的叫法（甚至含缩写） */}
+                    {normalizeTrapType(round.assessment.trapType) || "未知操控"}
                   </Text>
                 </View>
 
@@ -496,6 +520,39 @@ export default function ReviewScreen({
             )}
           </View>
         ))}
+
+        {/* 现实迁移校准：每轮都在讲"他怎么操控你"，这里做等量对冲，避免玩家把框架套到所有人身上 */}
+        <View style={styles.realityCard}>
+          <Text style={styles.realityTitle}>{REALITY_TRANSFER_TITLE}</Text>
+          <Text style={styles.realityText}>{reality.lead}</Text>
+
+          {/* 本关专属的"最易误读"：玩家刚打完哪一关，就给哪一关的对照 */}
+          <Text style={styles.realityMisreadLabel}>{REALITY_MISREAD_LABEL}</Text>
+          <View style={styles.realityMisreadBox}>
+            <Text style={styles.realityMisreadText}>{reality.misread}</Text>
+          </View>
+
+          <Text style={styles.realityChecksTitle}>{REALITY_CHECKS_TITLE}</Text>
+          {reality.checks.map((q, i) => (
+            <View key={`check${i}`} style={styles.realityCheckRow}>
+              <Text style={styles.realityCheckNum}>{i + 1}.</Text>
+              <Text style={styles.realityCheckText}>{q}</Text>
+            </View>
+          ))}
+
+          {REALITY_TRANSFER_BRANCHES.map((b, i) => (
+            <View key={`branch${i}`} style={styles.realityBranch}>
+              <Text style={styles.realityBranchLabel}>{b.label}</Text>
+              <Text style={styles.realityText}>{b.text}</Text>
+            </View>
+          ))}
+
+          {REALITY_TRANSFER_CLOSING.map((line, i) => (
+            <Text key={`closing${i}`} style={styles.realityClosing}>
+              {line}
+            </Text>
+          ))}
+        </View>
       </ScrollView>
 
       {readOnly && footer ? (
@@ -599,6 +656,107 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: fontSize.body,
     lineHeight: 24,
+    fontFamily,
+  },
+  /** 综合分说明：与结论文案用浅色小字区分开，避免被读成又一条评价 */
+  conclusionCalibration: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    lineHeight: 20,
+    marginTop: space.sm,
+    paddingTop: space.sm,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    fontFamily,
+  },
+  // ===== 现实迁移校准 =====
+  realityCard: {
+    backgroundColor: palette.surfaceSoft,
+    borderRadius: radius.lg,
+    padding: space.md,
+    marginBottom: space.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.sage,
+  },
+  realityTitle: {
+    color: palette.primaryDark,
+    fontSize: fontSize.sub,
+    fontWeight: fontWeight.bold,
+    marginBottom: space.sm,
+    fontFamily,
+  },
+  realityText: {
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  realityMisreadLabel: {
+    color: palette.text,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    marginTop: space.md,
+    marginBottom: space.xs,
+    fontFamily,
+  },
+  /** 与"三个问题"区分层级：正文略深 + peach 竖条，表示这是本关的对照，而不是又一组自检题 */
+  realityMisreadBox: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: palette.peach,
+  },
+  realityMisreadText: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  realityChecksTitle: {
+    color: palette.primaryDark,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    marginTop: space.md,
+    marginBottom: space.xs,
+    fontFamily,
+  },
+  realityCheckRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 4,
+  },
+  realityCheckNum: {
+    color: palette.sage,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    marginRight: 6,
+    fontWeight: fontWeight.bold,
+  },
+  realityCheckText: {
+    flex: 1,
+    color: palette.textSoft,
+    fontSize: fontSize.body,
+    lineHeight: 22,
+    fontFamily,
+  },
+  realityBranch: {
+    marginTop: space.sm,
+  },
+  realityBranchLabel: {
+    color: palette.blue,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.semibold,
+    marginBottom: 2,
+    fontFamily,
+  },
+  realityClosing: {
+    color: palette.text,
+    fontSize: fontSize.body,
+    lineHeight: 24,
+    marginTop: space.md,
     fontFamily,
   },
   sectionTitleLarge: {

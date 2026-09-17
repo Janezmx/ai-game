@@ -29,5 +29,8 @@
     "electron-builder": "^25.1.8",
     "typescript": "^5.4.0"
   },
-  "main": "electron/main.js"
+  "main": "electron/main.js",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
 }

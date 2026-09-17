@@ -236,13 +236,17 @@ export default function HeartDomainPrepareScreen({
         <View style={styles.statsRow}>
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.shieldHealth}</Text>
-            <Text style={styles.statLabel}>护盾强度</Text>
+            <Text style={styles.statLabel}>心域护盾</Text>
           </View>
           <View style={styles.statBox}>
             <Text style={styles.statValue}>{sanctuary.equippedArtifacts.length}</Text>
             <Text style={styles.statLabel}>法器装备</Text>
           </View>
         </View>
+        {/* 作用说明：心域护盾决定开局抵抗值（对抗中的实时血量是对战页的「抵抗值」） */}
+        <Text style={styles.statsHint}>
+          心域护盾决定你开局的抵抗值：每打完一局会被磨损（输了磨损更多），修复阶段可以把它养回来。
+        </Text>
 
         {/* 快速操作 */}
         <View style={styles.actionsRow}>
@@ -350,7 +354,8 @@ export default function HeartDomainPrepareScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: palette.bg,
+    backgroundColor: palette.bg,
+
     width: "100%",
     alignSelf: "center",
   },
@@ -448,6 +453,15 @@ const styles = StyleSheet.create({
     color: palette.textSoft,
     fontSize: 13,
     marginTop: 2,
+  },
+  /** 两个"血量"的命名说明：避免备战页的护盾被误当成对战血量 */
+  statsHint: {
+    color: palette.textFaint,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    marginTop: -8,
+    marginBottom: space.lg,
   },
   amuletSection: {
     marginBottom: space.lg,

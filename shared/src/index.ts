@@ -194,13 +194,16 @@ export interface Badge {
   unlockedAt?: number;
 }
 
+// 说明：badge 的 id 是**已持久化的存档键**（localStorage 按 id 记录已解锁项），
+// 因此关卡改名时只更新面向玩家的 name / description，id 一律保持不变，
+// 否则老玩家的解锁进度会被静默清空。
 export const ALL_BADGES: Badge[] = [
   { id: "first_clear", name: "初次通关", description: "完成第一关", icon: "🌟" },
-  { id: "gaslight_master", name: "煤气灯识破者", description: "通关煤气灯效应关卡", icon: "💡" },
-  { id: "pua_resist", name: "PUA抵抗者", description: "通关职场PUA关卡", icon: "💼" },
+  { id: "gaslight_master", name: "煤气灯识破者", description: "通关煤气灯操控关卡", icon: "💡" },
+  { id: "pua_resist", name: "打压反击者", description: "通关职场打压关卡", icon: "💼" },
   { id: "family_bound", name: "亲情边界", description: "通关亲情绑架关卡", icon: "👨‍👩‍👧" },
-  { id: "net_guard", name: "网络守卫", description: "通关匿名网络攻击关卡", icon: "👾" },
-  { id: "bias_breaker", name: "偏见破除者", description: "通关隐性歧视关卡", icon: "🎭" },
+  { id: "net_guard", name: "网络守卫", description: "通关网络围攻关卡", icon: "👾" },
+  { id: "bias_breaker", name: "偏见破除者", description: "通关偏见伪装关卡", icon: "🎭" },
   { id: "all_clear", name: "全通者", description: "通关全部5关", icon: "🏆" },
   { id: "perfect_defense", name: "完美防御", description: "任意一关综合评分≥90", icon: "✨" },
 ];
@@ -229,10 +232,10 @@ export interface LevelConfig {
 export const LEVELS: LevelConfig[] = [
   {
     id: 1,
-    title: "煤气灯效应",
+    title: "煤气灯操控",
     subtitle: "否定感受 · 认知侵蚀",
     npcRole: "亲密关系中的操控者",
-    coreTactic: "煤气灯效应",
+    coreTactic: "煤气灯操控",
     npcRoles: ["恋人", "暧昧对象", "密友"],
     scenarios: ["迟到/失约", "忘记重要承诺", "物品丢失", "否认说过的话"],
     openings: [
@@ -246,10 +249,10 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     id: 2,
-    title: "职场PUA",
+    title: "职场打压",
     subtitle: "能力贬低 · 价值否定",
     npcRole: "职场中的打压者",
-    coreTactic: "职场PUA",
+    coreTactic: "职场打压",
     npcRoles: ["直属上司", "资深同事", "客户", "HR"],
     scenarios: ["方案被当众否定", "晋升落选", "公开批评", "功劳被抢", "绩效评估不公"],
     openings: [
@@ -280,10 +283,10 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     id: 4,
-    title: "匿名网络攻击",
+    title: "网络围攻",
     subtitle: "群体极化 · 去人格化",
     npcRole: "网络暴力的施暴者",
-    coreTactic: "匿名网络攻击",
+    coreTactic: "网络围攻",
     npcRoles: ["匿名账号群", "水军", "冒充熟人", "键盘侠"],
     scenarios: ["评论区争议", "照片被恶意传播", "谣言四起", "被网暴围攻", "社交账号被举报"],
     openings: [
@@ -297,10 +300,10 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     id: 5,
-    title: "隐性歧视",
+    title: "偏见伪装",
     subtitle: "微侵犯 · 预设质疑",
     npcRole: "系统性的偏见者",
-    coreTactic: "隐性歧视",
+    coreTactic: "偏见伪装",
     npcRoles: ["面试官", "教授", "同事", "行业前辈", "权威人士"],
     scenarios: ["求职被质疑能力", "晋升被区别对待", "项目分配不公", "能力被预设低估", "被要求证明自己"],
     openings: [
@@ -320,6 +323,20 @@ export interface KnowledgePoint {
   tactic: string; // 操控手法名（对应关卡标题）
   definition: string; // 一句话定义
   signals: string[]; // 识别信号（3-4 条）
+  /**
+   * 「⚠️ 这些不算操控」：与 signals 一一对照的安全反例。
+   *
+   * 为什么必须有：只教"识别信号"等于只给玩家一张筛子，却没有告诉他筛孔多大，
+   * 结果是通关后把正常批评、情绪化表达也读成操控（假阳性）。
+   * 与 signals 成对呈现，才能把"识别"升级为"辨别"。
+   */
+  nonSignals?: string[];
+  /**
+   * 「⏸ 先确认，再反击」：证据不足时的求证话术（先要具体 → 再说感受 → 最后定边界）。
+   * 与 healthyResponse 的区别：healthyResponse 回答"怎么守住边界"，
+   * confirmationPrompts 回答"怎么先搞清楚对方是不是这个意思"。
+   */
+  confirmationPrompts?: string[];
   healthyResponse: string[]; // 健康应对话术示例（2-3 条）
   caseStory?: string; // 真实案例小故事
 }

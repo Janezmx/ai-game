@@ -109,7 +109,7 @@ children.push(new PageBreak());
 children.push(heading1("一、核心玩法 & 整体框架"));
 
 children.push(heading2("1.1 项目概述"));
-children.push(body("「清醒边界」是一款寓教于乐的心理防御向文字游戏。AI 实时生成操控型 NPC，玩家通过对话、用法器和心理重建来识别和抵御煤气灯效应、职场 PUA、亲情绑架等真实心理操控手法，每通关一关点亮一种心理学知识。"));
+children.push(body("「清醒边界」是一款寓教于乐的心理防御向文字游戏。AI 实时生成操控型 NPC，玩家通过对话、用法器和心理重建来识别和抵御煤气灯操控、职场打压、亲情绑架等真实心理操控手法，每通关一关点亮一种心理学知识。"));
 
 children.push(heading2("1.2 核心玩法设计"));
 children.push(body("1）核心循环"));
@@ -121,7 +121,7 @@ children.push(bullet("「心盾 / 真言镜 / 破谎矛」克制型法器，按�
 children.push(body("3）基础模块"));
 children.push(bullet("成长系统 / 关卡系统 / 战斗系统 / 教育回顾系统"));
 children.push(body("4）示例"));
-children.push(bullet("玩家进入第 1 关煤气灯效应 → AI 生成伴侣型 NPC 否认你的记忆 → 玩家用「真言镜」识破 → 完成 5 回合 → 复盘 + 心理学知识点 → 修复心域 → 进入第 2 关"));
+children.push(bullet("玩家进入第 1 关煤气灯操控 → AI 生成伴侣型 NPC 否认你的记忆 → 玩家用「真言镜」识破 → 完成 5 回合 → 复盘 + 心理学知识点 → 修复心域 → 进入第 2 关"));
 
 children.push(heading2("1.3 整体框架"));
 const frameworkTable = new Table({

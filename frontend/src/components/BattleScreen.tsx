@@ -322,9 +322,12 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
     cooldown: number;
   } | null>(null);
   // 回合结算弹框：评估完成后展示本回合数值加减（样式对齐法器反馈弹框）
+  // note = 该行数值由哪两维加权算出（主维 0.6 + 辅维 0.4），让四维的参与"可见"
   const [assessmentFeedback, setAssessmentFeedback] = useState<{
-    rows: { icon: string; label: string; text: string; good: boolean }[];
+    rows: { icon: string; label: string; text: string; good: boolean; note?: string }[];
     statusText: string;
+    /** 兜底轮（a.degraded）：四维是后端补的占位值，弹框只提示、不展示任何数值 */
+    degraded?: boolean;
   } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -353,10 +356,15 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
   const openingFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 回合结算快照：发送消息前记录战局数值，评估返回后据此计算本回合"加减"变化
   const turnStartValuesRef = useRef<{ npcControlLevel: number; playerResistance: number } | null>(null);
+  // 重试失败回合时，把要重发的文本经 ref 交给 handleSend：它读的是 inputText 这个 state，
+  // 而点击重试当帧 setInputText 还没生效，直接调用会读到空串而不发送。
+  const retryTextRef = useRef<string | null>(null);
   // 待展示的回合结算弹框内容：评估事件到达时生成、done 事件时上屏（避免与胜负弹窗抢镜）
   const pendingSummaryRef = useRef<{
-    rows: { icon: string; label: string; text: string; good: boolean }[];
+    rows: { icon: string; label: string; text: string; good: boolean; note?: string }[];
     statusText: string;
+    /** 兜底轮标记：数值不可信，弹框只提示、不展示数值行 */
+    degraded?: boolean;
   } | null>(null);
   const summaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 明辨铃：记录激活时的回合数，用 useEffect 监听回合变化自动复位
@@ -512,7 +520,10 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
 
   // 发送玩家消息
   const handleSend = useCallback(async () => {
-    const text = inputText.trim();
+    // 重试路径：待发文本经 retryTextRef 传入（点击重试当帧 setInputText 尚未生效，读 inputText 会是空串）
+    const retryText = retryTextRef.current;
+    retryTextRef.current = null;
+    const text = (retryText ?? inputText).trim();
     if (!text || isWaiting || isSending) return;
 
     setInputText("");
@@ -533,17 +544,21 @@ export default function BattleScreen({ onComplete, level }: BattleScreenProps) {
         ? { text: adoptedSuggestion.text, rationale: adoptedSuggestion.rationale || "" }
         : null;
 
+    // 发送前的 store 实时快照：这里不能用组件闭包里的 conversation——重试路径刚回滚过末尾消息，
+    // 闭包里还留着已被移除的那条，会让同一条玩家消息被发两次（后端历史里出现重复 user 消息）。
+    const preSend = useGameStore.getState().conversation;
+
     // 记录回合开始前的战局数值，评估返回后据此计算本回合"加减"变化
     turnStartValuesRef.current = {
-      npcControlLevel: conversation.npcControlLevel,
-      playerResistance: conversation.playerResistance,
+      npcControlLevel: preSend.npcControlLevel,
+      playerResistance: preSend.playerResistance,
     };
 
     // 添加玩家消息
     addMessageWithId({ role: "player", content: text, timestamp: Date.now() });
 
     // 构建对话历史
-    const msgsForAPI = conversation.messages.map((m) => ({
+    const msgsForAPI = preSend.messages.map((m) => ({
       role: (m.role === "player" ? "user" : "assistant") as "user" | "assistant" | "system",
       content: m.content,
     }));
@@ -605,6 +620,18 @@ NPC控制等级：${conversation.npcControlLevel}，
               const a = event.data as NPCResponseAssessment;
               setIsAssessing(false);
               const s = useGameStore.getState();
+              // 四维兜底：后端偶发返回缺 dimensions 的评估（模型漏字段），按 50 补齐，
+              // 避免结算归因/复盘/最高分结算读取 undefined 直接崩溃
+              const rawDims: any = a.dimensions;
+              const dims = {
+                boundaryAwareness: typeof rawDims?.boundaryAwareness === "number" ? rawDims.boundaryAwareness : 50,
+                emotionalStability: typeof rawDims?.emotionalStability === "number" ? rawDims.emotionalStability : 50,
+                cognitiveClarity: typeof rawDims?.cognitiveClarity === "number" ? rawDims.cognitiveClarity : 50,
+                assertiveResponse: typeof rawDims?.assertiveResponse === "number" ? rawDims.assertiveResponse : 50,
+              };
+              // 兜底轮标记：后端评估失败时会补一套 50 分占位值并置 degraded=true，
+              // 这些分数不是玩家表现，既不能展示成"收益"，也不能进成绩（见下方落库分支）。
+              const degraded = a.degraded === true;
               // 依据发送前快照，把本轮战局数值变化换算成"加减"，供回合结算弹框展示
               const startVals = turnStartValuesRef.current;
               turnStartValuesRef.current = null;
@@ -613,13 +640,35 @@ NPC控制等级：${conversation.npcControlLevel}，
                 const npcDelta = Math.round(s.conversation.npcControlLevel - startVals.npcControlLevel);
                 const shieldDelta = Math.round(s.conversation.playerResistance - startVals.playerResistance);
                 const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
-                const rows: { icon: string; label: string; text: string; good: boolean }[] = [];
+                const rows: { icon: string; label: string; text: string; good: boolean; note?: string }[] = [];
                 // 控制力下降=我方获益(绿)；抵抗上升=获益。
                 // 迷雾不在回合结算弹框展示（按产品要求隐藏），如需恢复可在此补迷雾行。
-                if (npcDelta !== 0) rows.push({ icon: "🧠", label: "NPC控制力", text: signed(npcDelta), good: npcDelta < 0 });
-                if (shieldDelta !== 0) rows.push({ icon: "🛡️", label: "心域护盾", text: signed(shieldDelta), good: shieldDelta > 0 });
-                const statusText =
-                  a.playerStatus === "effective"
+                // note 说明该行数值由哪两维加权算出（主维 0.6 + 辅维 0.4）：
+                // 不写出来玩家只会看到数字跳动，无法感知"情绪/认知也在参与结算"。
+                //
+                // 兜底轮一律不展示数值行：按占位 50 分反算会固定得出"抵抗值 +5"这类假收益，
+                // 于是对局中说"你这轮稳住了"、复盘里却写"未获取到有效数据"，前后自相矛盾。
+                if (!degraded && npcDelta !== 0)
+                  rows.push({
+                    icon: "🧠",
+                    label: "NPC控制力",
+                    text: signed(npcDelta),
+                    good: npcDelta < 0,
+                    note: `坚定 ${dims.assertiveResponse} · 认知 ${dims.cognitiveClarity}`,
+                  });
+                if (!degraded && shieldDelta !== 0)
+                  rows.push({
+                    icon: "🛡️",
+                    // 与对战页顶部血条同名（旧文案叫"心域护盾"，与备战页那个不参战的护盾混淆）
+                    label: "抵抗值",
+                    text: signed(shieldDelta),
+                    good: shieldDelta > 0,
+                    note: `边界 ${dims.boundaryAwareness} · 情绪 ${dims.emotionalStability}`,
+                  });
+                // 兜底轮的正文已经写了"未获取到有效数据"（见弹框渲染），这里只补一句后果说明，避免同一句说两遍
+                const statusText = degraded
+                  ? "这一轮不计入本局成绩，可以继续对话。"
+                  : a.playerStatus === "effective"
                     ? "✓ 你的回应稳住了局面"
                     : a.playerStatus === "shaken"
                       ? "这一轮你有些被动"
@@ -628,7 +677,7 @@ NPC控制等级：${conversation.npcControlLevel}，
                         : rows.length === 0
                           ? "本回合数值无显著变化"
                           : "本回合战局已结算";
-                pendingSummaryRef.current = { rows, statusText };
+                pendingSummaryRef.current = { rows, statusText, degraded };
               }
               lastTrapType.current = a.trapType || "";
               lastAlternatives.current = a.alternatives || [];
@@ -662,25 +711,17 @@ NPC控制等级：${conversation.npcControlLevel}，
                 // 轻量评估模式：对话期只入复盘轮次与数值结算，不再内联展示科普/点评文本。
                 // 复盘长文本（whyNote/identificationTip/trapAnalysis/alternatives 等）已延迟，
                 // 玩家进入复盘界面后由 /api/review/complete 按轮补全。
-                // 维度兜底：后端偶发返回缺 dimensions 的评估（模型漏字段），按 50 补齐，
-                // 避免 setDimensionScores/复盘/最高分结算读取 undefined 直接崩溃
-                const rawDims: any = a.dimensions;
-                const dims = {
-                  boundaryAwareness: typeof rawDims?.boundaryAwareness === "number" ? rawDims.boundaryAwareness : 50,
-                  emotionalStability: typeof rawDims?.emotionalStability === "number" ? rawDims.emotionalStability : 50,
-                  cognitiveClarity: typeof rawDims?.cognitiveClarity === "number" ? rawDims.cognitiveClarity : 50,
-                  assertiveResponse: typeof rawDims?.assertiveResponse === "number" ? rawDims.assertiveResponse : 50,
-                };
+                // 维度兜底已在本事件处理开头完成（dims），此处直接复用
                 const round: ReviewRound = {
                   npcMessage: { ...npcMsg, trapType: a.trapType, playerStatus: a.playerStatus },
                   playerMessage: playerMsg?.role === "player" ? playerMsg : undefined,
                   assessment: a.dimensions ? a : { ...a, dimensions: dims },
                 };
                 store.addReviewRound(round);
-                // 兜底轮（a.degraded）的 dims 是后端补的占位 50 分，不是玩家真实表现：
+                // 兜底轮（degraded）的 dims 是后端补的占位 50 分，不是玩家真实表现：
                 // 不写进 dimensionHistory（本局综合分/成长曲线）与历史最高分，否则假 50 会被
                 // 当成成绩结算、还会把最高分拉低。该轮仍进复盘轮次，并在复盘页提示"评估未获取到有效数据"。
-                if (!a.degraded) {
+                if (!degraded) {
                   store.setDimensionScores(dims);
                   // 用 getState() 取最新值：store 是组件渲染快照，闭包里可能已过期，
                   // 会让「历史最高分」被本轮较低分覆盖
@@ -1106,7 +1147,26 @@ NPC控制等级：${conversation.npcControlLevel}，
             onPress={() => {
               setSseError(null);
               if (conversation.npcName && conversation.messages.length > 0) {
-                // 对话中出错：重新发送当前轮请求
+                // 对话中出错：把这一轮**原样重发**，而不是只把输入权还回去——
+                // 否则那条已上屏的玩家消息要玩家自己再打一遍，重打还会连着两条玩家消息。
+                const msgs = useGameStore.getState().conversation.messages;
+                let lastPlayerIdx = -1;
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  if (msgs[i].role === "player" && msgs[i].content) {
+                    lastPlayerIdx = i;
+                    break;
+                  }
+                }
+                // 先确认 handleSend 一定会执行，再回滚——它开头有 isWaiting/isSending 的守卫，
+                // 若先删消息却被守卫挡回，玩家这一轮的话就凭空消失了。
+                if (lastPlayerIdx >= 0 && !battleEnded && !isWaiting && !isSending) {
+                  // 回滚这一轮的残留（玩家消息 + 空的 NPC 占位/半截台词），文本经 ref 交给 handleSend
+                  retryTextRef.current = msgs[lastPlayerIdx].content;
+                  store.removeLastMessages(msgs.length - lastPlayerIdx);
+                  handleSend();
+                  return;
+                }
+                // 兜底（已分胜负 / 状态未复位）：退回旧行为，至少把输入权还回去
                 store.setPlayerTurn(true);
                 setIsWaiting(false);
                 setIsSending(false);
@@ -1313,6 +1373,10 @@ NPC控制等级：${conversation.npcControlLevel}，
                   : "心域边界已被完全渗透。"}
                 {" "}可继续查看下方对话，随时进入修复。
               </Text>
+              {/* 失败是最容易"把所有人都当成操控者"的时刻，这里先接住这层泛化 */}
+              <Text style={styles.victoryBannerHint}>
+                也别急着把对方都当成操控者——先看清楚，再决定怎么回应。
+              </Text>
             </View>
             <TouchableOpacity
               style={[styles.victoryBannerBtn, { backgroundColor: palette.clay }]}
@@ -1337,6 +1401,10 @@ NPC控制等级：${conversation.npcControlLevel}，
               <Text style={styles.victoryBannerTitle}>守护成功</Text>
               <Text style={styles.victoryBannerDesc}>
                 已抵御{conversation.npcName}的操控。可继续查看下方对话，随时进入修复。
+              </Text>
+              {/* 胜利时最容易把"我赢了"读成"现实里对方就是错的"，这里补一句校准 */}
+              <Text style={styles.victoryBannerHint}>
+                赢了这一局，不等于现实里对方就是错的。
               </Text>
             </View>
             <TouchableOpacity
@@ -1375,23 +1443,31 @@ NPC控制等级：${conversation.npcControlLevel}，
           <View style={styles.artifactFeedbackCard}>
             <Text style={styles.artifactFeedbackIcon}>📊</Text>
             <Text style={styles.artifactFeedbackName}>回合结算</Text>
-            {assessmentFeedback.rows.length === 0 ? (
+            {assessmentFeedback.degraded ? (
+              // 兜底轮：分数据不可信，说"无显著变化"会被理解成"这轮白打"，这里直接说明原因
+              <Text style={styles.artifactFeedbackEffect}>本轮评估未获取到有效数据</Text>
+            ) : assessmentFeedback.rows.length === 0 ? (
               <Text style={styles.artifactFeedbackEffect}>本回合数值无显著变化</Text>
             ) : (
               <View style={styles.summaryRows}>
                 {assessmentFeedback.rows.map((row, idx) => (
-                  <View key={idx} style={styles.summaryRow}>
-                    <Text style={styles.summaryRowLabel}>
-                      {row.icon} {row.label}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.summaryRowValue,
-                        row.good ? styles.summaryRowGood : styles.summaryRowBad,
-                      ]}
-                    >
-                      {row.text}
-                    </Text>
+                  <View key={idx} style={styles.summaryRowBlock}>
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryRowLabel}>
+                        {row.icon} {row.label}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.summaryRowValue,
+                          row.good ? styles.summaryRowGood : styles.summaryRowBad,
+                        ]}
+                      >
+                        {row.text}
+                      </Text>
+                    </View>
+                    {row.note ? (
+                      <Text style={styles.summaryRowNote}>由 {row.note} 加权得出</Text>
+                    ) : null}
                   </View>
                 ))}
               </View>
@@ -2007,6 +2083,14 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontFamily,
   },
+  /** 胜负横幅里的校准提示：比正文再低一层，用 blue 表示"这是一句提醒，不是战报" */
+  victoryBannerHint: {
+    color: palette.blue,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 4,
+    fontFamily,
+  },
   victoryBannerBtn: {
     backgroundColor: palette.primary,
     paddingVertical: space.sm,
@@ -2108,6 +2192,20 @@ const styles = StyleSheet.create({
   },
 
   // ===== 回合结算弹框内数值行（复用法器弹框卡片样式） =====
+  /** 单行的外层：行 + 归因小字（四维加权说明） */
+  summaryRowBlock: {
+    alignSelf: "stretch",
+  },
+  /** 归因小字：比正文低一层，说明这行数值由哪两维算出 */
+  summaryRowNote: {
+    color: palette.textFaint,
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: "right",
+    marginTop: -2,
+    marginBottom: 4,
+    fontFamily,
+  },
   summaryRows: {
     alignSelf: "stretch",
     marginTop: space.xs,

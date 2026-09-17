@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal } from "react-native";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
@@ -13,9 +13,26 @@ export default function HomePage() {
   const masteredKnowledgePointIds = useGameStore((s) => s.masteredKnowledgePointIds);
   const gameHistory = useGameStore((s) => s.gameHistory);
   const setCurrentLevel = useGameStore((s) => s.setCurrentLevel);
+  const resetLevel = useGameStore((s) => s.resetLevel);
 
   const [showLevelPicker, setShowLevelPicker] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  /**
+   * 到达首页 = 结束本轮修炼：心域护盾复位（养满）、关卡回到第 1 关。
+   *
+   * 为什么放在"首页挂载"而不是"返回首页按钮"上：
+   * 回到首页有多条路径（游戏页的返回首页按钮、成长记录页的 history.back()、地址栏直开 "/"），
+   * 挂在按钮上会出现"有的入口复位、有的不复位"，同一个首页两种心域状态。
+   * 挂在这里才能让规则统一为一句：**回到首页就复位**。
+   *
+   * 因此"心域磨损"只在**不回首页、一路连续点「下一关」**时累积。
+   * 由于每局胜利只磨损 5、而修复一次能养回约 18，正常通关不会掉护盾；
+   * 真正会把它打薄的是**失败**（每次净降 6 点左右），也就是"连败越来越吃力"这个场景。
+   */
+  useEffect(() => {
+    resetLevel();
+  }, [resetLevel]);
 
   const masteredCount = masteredKnowledgePointIds.length;
   const totalCount = 5;
@@ -92,8 +109,12 @@ export default function HomePage() {
           <Text style={styles.subtitle}>守护你的心域，识别并抵御无形操控</Text>
           <View style={styles.descCard}>
             <Text style={styles.descText}>
-              一款寓教于乐的心理防御游戏。在 AI 对话攻防中，学会识别煤气灯效应、职场PUA、
+              一款寓教于乐的心理防御游戏。在 AI 对话攻防中，学会识别煤气灯操控、职场打压、
               亲情绑架等操控手法，把每一次练习变成成长。
+            </Text>
+            {/* 入口处先立好框架：这里练的是"辨别"而不是"怀疑"，避免通关后见谁都像操控者 */}
+            <Text style={styles.descHint}>
+              这里练习的是「辨别」，不是「怀疑」——现实里，多数人说错话的时候并没有恶意。
             </Text>
           </View>
         </View>
@@ -231,6 +252,17 @@ const styles = StyleSheet.create({
     fontSize: fontSize.body,
     lineHeight: 26,
     textAlign: "center",
+  },
+  /** 与主描述拉开层级：不是功能介绍，而是一句态度说明 */
+  descHint: {
+    color: palette.textFaint,
+    fontSize: fontSize.caption,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: space.sm,
+    paddingTop: space.sm,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
   },
   sectionTitle: {
     alignSelf: "flex-start",
